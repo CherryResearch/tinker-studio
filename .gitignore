@@ -1,0 +1,20 @@
+.env
+.venv/
+tinker_env/
+__pycache__/
+.ipynb_checkpoints/
+.vscode/
+
+run_logs/
+run_outputs/
+outputs/
+checkpoints/
+driift bluesky fine-tune dataset/
+
+.tinker_stop_request.json
+gcm-diagnose.log
+
+*.pyc
+*.pyo
+*.pyd
+*.log
