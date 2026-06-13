@@ -8,6 +8,13 @@ description: Launch, list, describe, smoke-test, and resume Tinker training runs
 Work from the Tinker run-manager workspace root. Prefer the direct Python CLI over the batch
 launchers so Codex can capture output without an extra interactive window.
 
+## Setup And Safety
+
+- Use the workspace venv when present: `.\tinker_env\Scripts\python.exe`.
+- Check key availability with `describe_tinker_api_key()` or existing helpers; never echo the real `TINKER_API_KEY`.
+- Resolve the dataset through the workspace helpers. The default private dataset path is `data\training_data`.
+- Before a full run after dataset or code changes, run a smoke test and check monitors for duplicate active runs.
+
 ## Quick Start
 
 Check the environment and available runs:

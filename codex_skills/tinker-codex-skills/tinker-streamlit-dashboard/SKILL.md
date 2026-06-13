@@ -9,6 +9,13 @@ Use this in the Tinker Studio workspace after `streamlit_tinker_dashboard.py` ha
 The dashboard is an operator UI over generated shortform posts, long-form/imported/interview sources,
 local run metadata, stop control state, the local endpoint bridge, and optional Tinker API telemetry.
 
+## Setup And Safety
+
+- Launch from the Tinker workspace root so relative paths in `.env.example` resolve correctly.
+- Keep real `TINKER_API_KEY` values in ignored `.env` or local secret stores; do not print them in summaries or commit them.
+- Dataset panels default to `data\training_data`, which is ignored by the main Tinker repo and may be a private nested repo.
+- If changing publish or dataset boundaries, use `tinker-publish-safety` before staging or pushing.
+
 ## Quick Start
 
 Prefer the launcher for user-facing sessions:

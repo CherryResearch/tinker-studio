@@ -13,6 +13,13 @@ Use this in a Tinker Studio workspace to gather consented interview answers and 
 
 Before conducting or scripting an interview, read `references/interview-assistant-guide.md`. It contains template questions, conditional follow-ups, privacy guidance, and save/review commands.
 
+## Setup And Safety
+
+- Write interview rows only through `collect_interview_qa.py`; it resolves the dataset root through the Tinker helpers and should land under private dataset storage such as `data\training_data`.
+- Confirm the user wants answers saved before writing raw or processed rows.
+- Do not store third-party secrets, private contact details, or real env keys in interview rows.
+- After saving, use `review --last 5` and `tinker-dataset-planning` to verify derived examples before training.
+
 ## Quick Commands
 
 List available prompt rounds:

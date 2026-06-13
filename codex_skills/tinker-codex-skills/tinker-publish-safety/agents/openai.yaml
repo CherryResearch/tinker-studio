@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tinker Publish Safety"
+  short_description: "Partition private data and publish Tinker changes safely."
+  default_prompt: "Prepare Tinker Studio for publication by checking Git remotes, branches, ignored data, private dataset repos, environment keys, and draft PR state."
