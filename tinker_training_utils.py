@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 import re
 import statistics
@@ -17,6 +18,8 @@ from tinker_cookbook.supervised.data import conversation_to_datum
 
 
 MANIFEST_FILENAME = "dataset_manifest.json"
+DATASET_ROOT_ENV_VARS = ("TINKER_STUDIO_DATASET_ROOT", "TINKER_DATASET_ROOT")
+DEFAULT_DATASET_ROOT = Path("data") / "training_data_cerise"
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,24 @@ class ModelResolution:
 
 def find_dataset_root(search_start: str | Path) -> Path:
     search_root = Path(search_start).resolve()
+    for env_var in DATASET_ROOT_ENV_VARS:
+        configured = os.environ.get(env_var)
+        if configured:
+            configured_path = Path(configured).expanduser()
+            if not configured_path.is_absolute():
+                configured_path = search_root / configured_path
+            configured_root = configured_path.resolve()
+            manifest_path = configured_root / "tinker" / MANIFEST_FILENAME
+            if not manifest_path.exists():
+                raise FileNotFoundError(
+                    f"{env_var} points to {configured_root}, but {manifest_path} does not exist."
+                )
+            return configured_root
+
+    default_root = search_root / DEFAULT_DATASET_ROOT
+    if (default_root / "tinker" / MANIFEST_FILENAME).exists():
+        return default_root
+
     matches = sorted(
         path
         for path in search_root.rglob(MANIFEST_FILENAME)

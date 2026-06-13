@@ -49,7 +49,7 @@ import json
 import pandas as pd
 from pathlib import Path
 
-root = Path("driift bluesky fine-tune dataset")
+root = Path("data") / "training_data_cerise"
 manifest = json.loads((root / "tinker" / "dataset_manifest.json").read_text(encoding="utf-8"))
 posts = pd.read_csv(root / "processed" / "posts.csv")
 print(manifest["collected_at_utc"])
@@ -63,11 +63,11 @@ print("latest_post:", posts["created_at"].max())
 Use `streamlit_tinker_dashboard.py` or `launch_streamlit_dashboard.bat` when the user wants an
 interactive dataset view. The dashboard reads:
 
-- `driift bluesky fine-tune dataset\processed\posts.csv`
-- `driift bluesky fine-tune dataset\tinker\dataset_manifest.json`
-- `driift bluesky fine-tune dataset\processed\rentry_pages.jsonl` for current long-form seed docs
-- `driift bluesky fine-tune dataset\processed\interview_qa.jsonl` for interview-derived Q&A and post-continuation examples
-- `driift bluesky fine-tune dataset\processed\imported_sources.jsonl` for Google Keep, poetry, notes, and other local imports
+- `data\training_data_cerise\processed\posts.csv`
+- `data\training_data_cerise\tinker\dataset_manifest.json`
+- `data\training_data_cerise\processed\rentry_pages.jsonl` for current long-form seed docs
+- `data\training_data_cerise\processed\interview_qa.jsonl` for interview-derived Q&A and post-continuation examples
+- `data\training_data_cerise\processed\imported_sources.jsonl` for Google Keep, poetry, notes, and other local imports
 
 If the dashboard counts look wrong, validate these files directly before changing dashboard code.
 

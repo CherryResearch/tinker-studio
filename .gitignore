@@ -12,6 +12,8 @@ run_logs/
 run_outputs/
 outputs/
 checkpoints/
+data/*
+!data/README.md
 driift bluesky fine-tune dataset/
 custom_sources/
 imports/

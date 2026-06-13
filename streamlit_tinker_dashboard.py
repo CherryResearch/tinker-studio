@@ -32,13 +32,20 @@ WORKSPACE_ROOT = Path(__file__).resolve().parent
 
 
 def resolve_dataset_root() -> Path:
-    configured = os.environ.get("TINKER_STUDIO_DATASET_ROOT")
-    if configured:
-        return Path(configured).expanduser().resolve()
-    manifests = sorted(WORKSPACE_ROOT.glob("*/tinker/dataset_manifest.json"))
+    for env_var in ("TINKER_STUDIO_DATASET_ROOT", "TINKER_DATASET_ROOT"):
+        configured = os.environ.get(env_var)
+        if configured:
+            configured_path = Path(configured).expanduser()
+            if not configured_path.is_absolute():
+                configured_path = WORKSPACE_ROOT / configured_path
+            return configured_path.resolve()
+    default_root = WORKSPACE_ROOT / "data" / "training_data_cerise"
+    if (default_root / "tinker" / "dataset_manifest.json").exists():
+        return default_root
+    manifests = sorted(WORKSPACE_ROOT.glob("**/tinker/dataset_manifest.json"))
     if manifests:
         return manifests[0].parent.parent
-    return WORKSPACE_ROOT / "dataset"
+    return default_root
 
 
 DATASET_ROOT = resolve_dataset_root()
