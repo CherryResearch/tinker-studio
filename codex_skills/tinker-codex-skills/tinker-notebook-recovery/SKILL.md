@@ -10,6 +10,12 @@ or the user only has saved output and needs help figuring out what can be resume
 
 Start read-only. Recover identifiers first, then decide whether a resume action is safe.
 
+## Setup And Safety
+
+- Use existing notebook env helpers to load/check `TINKER_API_KEY`; do not print the key itself.
+- Compare notebook artifacts, API state, and `run_outputs\latest_active_run.json` before choosing a resume path.
+- Keep recovered IDs and checkpoint paths in local run metadata or summaries only; do not commit generated run outputs.
+
 ## Quick Start
 
 Extract artifacts and saved errors from the notebook:

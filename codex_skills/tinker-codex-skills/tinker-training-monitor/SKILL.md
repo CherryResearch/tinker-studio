@@ -8,6 +8,12 @@ description: Monitor active or recent Tinker training runs from the CLI, Rich da
 Use this skill for read-only inspection of run health before deciding whether to resume, stop, or
 start anything new.
 
+## Setup And Safety
+
+- Prefer read-only CLI monitors before starting, resuming, or stopping anything.
+- Do not print API keys while checking Tinker API state.
+- Treat local `run_outputs`, checkpoints, logs, and stop-signal files as local operational state; they should stay ignored by Git.
+
 ## Quick Start
 
 Take a one-shot CLI snapshot first:
