@@ -1,4 +1,7 @@
 .env
+.env.*
+!.env.example
+.streamlit/secrets.toml
 .venv/
 tinker_env/
 __pycache__/
@@ -10,9 +13,16 @@ run_outputs/
 outputs/
 checkpoints/
 driift bluesky fine-tune dataset/
+custom_sources/
+imports/
+google_keep/
+takeout/
+Takeout/
 
 .tinker_stop_request.json
 gcm-diagnose.log
+*.sqlite
+*.db
 
 *.pyc
 *.pyo

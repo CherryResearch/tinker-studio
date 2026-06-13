@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tinker Training Runs"
+  short_description: "List, start, smoke-test, resume, and verify Tinker runs."
+  default_prompt: "Run or resume a predefined Tinker training experiment from the workspace and verify it in the monitor dashboard."

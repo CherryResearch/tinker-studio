@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tinker Dataset Planning"
+  short_description: "Inspect dataset variants, source mixes, and run plans."
+  default_prompt: "Summarize the Tinker Studio dataset bundle, refreshed Bluesky counts, reply-context coverage, source mixes, dataset variants, and predefined experiment runs."

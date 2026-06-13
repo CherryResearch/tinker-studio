@@ -133,6 +133,7 @@ def build_post_examples(
                     "created_at": row.get("created_at"),
                     "is_reply": bool(row.get("is_reply")),
                     "hashtags": list(row.get("hashtags") or []),
+                    "reply_context_text": row.get("reply_context_text") or row.get("parent_text") or "",
                 },
             )
         )
@@ -167,12 +168,20 @@ def _build_user_prompt(opening_text: str, row: dict[str, Any]) -> str:
     ]
     if row.get("is_reply"):
         instructions.append("Make it read naturally as a reply.")
+    reply_context = str(
+        row.get("reply_context_text")
+        or row.get("parent_text")
+        or row.get("root_text")
+        or ""
+    ).strip()
     hashtags = list(row.get("hashtags") or [])
     if hashtags:
         instructions.append("If hashtags fit naturally, keep them concise.")
+    context_block = f"\n\nReply context:\n{reply_context}" if reply_context else ""
     return textwrap.dedent(
         f"""
         {" ".join(instructions)}
+        {context_block}
 
         Opening:
         {opening_text}

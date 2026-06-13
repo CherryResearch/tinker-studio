@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tinker Training Monitor"
+  short_description: "Inspect run health, dashboards, heartbeats, and stop state."
+  default_prompt: "Check whether a Tinker training run is active, stale, visible in the dashboard, or resumable."

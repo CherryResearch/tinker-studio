@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tinker Interview Collection"
+  short_description: "Collect interview answers into chunked Tinker training rows."
+  default_prompt: "Use the Tinker interview guide to collect, validate, review, and upload interview-style source chunks for the local Tinker Studio dataset."

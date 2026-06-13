@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tinker Notebook Recovery"
+  short_description: "Recover run IDs, checkpoints, and resume paths."
+  default_prompt: "Recover Tinker notebook or run-manager state after an interruption."
