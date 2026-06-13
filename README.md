@@ -10,6 +10,8 @@ Run the dashboard:
 
 Private datasets, imports, run outputs, checkpoints, logs, local env files, and Google Takeout folders are ignored by Git. Strip notebook outputs before publishing.
 
+Private dataset storage lives outside the public Tinker tree under `data/`. By default the tools look for `data/training_data`, or a path from `TINKER_STUDIO_DATASET_ROOT` / `TINKER_DATASET_ROOT`.
+
 Interview collection:
 
 - Use [the interview assistant guide](codex_skills/tinker-codex-skills/tinker-interview-collection/references/interview-assistant-guide.md) for template questions and save/review commands.

@@ -38,12 +38,12 @@ Invoke-WebRequest -UseBasicParsing -Uri http://localhost:8501/_stcore/health
 
 ## Dashboard Data Sources
 
-- Dataset tab: `local bluesky fine-tune dataset\processed\posts.csv`, reply-context columns, and `tinker\dataset_manifest.json`.
+- Dataset tab: `data\training_data\processed\posts.csv`, reply-context columns, and `tinker\dataset_manifest.json`.
 - Sources tab: long-form seed docs in `processed\rentry_pages.jsonl`, imported sources in `processed\imported_sources.jsonl`, and interview rows in `processed\interview_qa.jsonl` when present.
 - Evaluation tab: held-out openings and targets loaded on demand from the dataset helper stack.
 - Training tab: `run_outputs\latest_active_run.json`, `.tinker_stop_request.json`, and optional Tinker API recent runs.
 - Chat / Endpoint tab: sampler checkpoints discovered from `run_outputs\*.json` and exposed through the local OpenAI-compatible bridge.
-- Sidebar refresh: calls `local bluesky fine-tune dataset\build_bluesky_finetune_dataset.py --handle <handle> --outdir <dataset-root>`.
+- Sidebar refresh: calls `data\training_data\build_bluesky_finetune_dataset.py --handle <handle> --outdir <dataset-root>`.
 
 If the user reports stale dataset counts, validate the manifest and CSV directly:
 
@@ -53,7 +53,7 @@ import json
 import pandas as pd
 from pathlib import Path
 
-root = Path("local bluesky fine-tune dataset")
+root = Path("data") / "training_data"
 manifest = json.loads((root / "tinker" / "dataset_manifest.json").read_text(encoding="utf-8"))
 posts = pd.read_csv(root / "processed" / "posts.csv")
 print(manifest["collected_at_utc"])
@@ -69,8 +69,8 @@ The dashboard button is appropriate when the user wants an interactive refresh. 
 subagent work, use the underlying script:
 
 ```powershell
-cd "local bluesky fine-tune dataset"
-..\tinker_env\Scripts\python.exe .\build_bluesky_finetune_dataset.py --handle <handle>.bsky.social --outdir .
+cd "data\training_data"
+..\..\tinker_env\Scripts\python.exe .\build_bluesky_finetune_dataset.py --handle <handle>.bsky.social --outdir .
 ```
 
 Public Bluesky fetches do not require a Tinker API key, but they do require network access. The
