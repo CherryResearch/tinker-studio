@@ -9,11 +9,17 @@ from typing import Any, Sequence
 
 import pandas as pd
 
+from tinker_interview_data import (
+    build_interview_examples,
+    evenly_limit_examples,
+    load_processed_interview_rows,
+)
 from tinker_training_utils import ConversationExample, DatasetBundle, build_post_examples, slugify_name
 
 
 PROCESSED_POSTS_PATH = Path("processed") / "posts.jsonl"
 RENTRY_PAGES_PATH = Path("processed") / "rentry_pages.jsonl"
+IMPORTED_SOURCES_PATH = Path("processed") / "imported_sources.jsonl"
 
 
 @dataclass(frozen=True)
@@ -47,10 +53,23 @@ def build_experiment_dataset_variants(
         chunk_words=longform_chunk_words,
         chunk_overlap_words=longform_chunk_overlap_words,
     )
+    interview_rows = load_processed_interview_rows(bundle.root)
+    interview_qa_examples, interview_post_examples = build_interview_examples(interview_rows)
+    imported_rows = load_imported_source_rows(bundle.root)
+    imported_examples = build_imported_source_examples(imported_rows)
 
     mixed_train_examples = dedupe_examples(
         initial_train_examples + recent_post_examples + longform_examples
     )
+    interview_balance_cap = max(8, len(mixed_train_examples) // 6)
+    balanced_interview_examples = dedupe_examples(
+        evenly_limit_examples(interview_qa_examples, limit=interview_balance_cap)
+        + evenly_limit_examples(interview_post_examples, limit=interview_balance_cap)
+    )
+    mixed_with_interview_examples = dedupe_examples(
+        mixed_train_examples + balanced_interview_examples
+    )
+    personal_source_examples = dedupe_examples(mixed_with_interview_examples + imported_examples)
 
     variants = {
         "initial_posts": DatasetVariant(
@@ -77,6 +96,45 @@ def build_experiment_dataset_variants(
                 "initial_posts": len(initial_train_examples),
                 "recent_posts": len(recent_post_examples),
                 "essay_chunks": len(longform_examples),
+            },
+        ),
+        "recent_posts_essays_interview": DatasetVariant(
+            name="recent_posts_essays_interview",
+            train_examples=mixed_with_interview_examples,
+            validation_examples=initial_validation_examples,
+            test_examples=initial_test_examples,
+            notes=(
+                "Original train split plus later posts, chunked Rentry essays, and a balanced "
+                "interview-derived corpus with both direct Q&A and post-style continuation examples. "
+                "Post-train eval stays disabled because recent posts still overlap the original validation/test horizon."
+            ),
+            allow_post_train_eval=False,
+            source_counts={
+                "initial_posts": len(initial_train_examples),
+                "recent_posts": len(recent_post_examples),
+                "essay_chunks": len(longform_examples),
+                "interview_qa": len(interview_qa_examples),
+                "interview_post": len(interview_post_examples),
+                "interview_balanced_mix": len(balanced_interview_examples),
+            },
+        ),
+        "personal_sources_mix": DatasetVariant(
+            name="personal_sources_mix",
+            train_examples=personal_source_examples,
+            validation_examples=initial_validation_examples,
+            test_examples=initial_test_examples,
+            notes=(
+                "Recent posts, essays, interview rows, and local imported source rows. "
+                "Imported notes and poetry are treated with source-specific prompts. "
+                "Post-train eval stays disabled because this is a blended personal-source corpus."
+            ),
+            allow_post_train_eval=False,
+            source_counts={
+                "initial_posts": len(initial_train_examples),
+                "recent_posts": len(recent_post_examples),
+                "essay_chunks": len(longform_examples),
+                "interview_balanced_mix": len(balanced_interview_examples),
+                "imported_sources": len(imported_examples),
             },
         ),
     }
@@ -186,6 +244,13 @@ def load_rentry_rows(dataset_root: str | Path) -> list[dict[str, Any]]:
     return load_jsonl_rows(path)
 
 
+def load_imported_source_rows(dataset_root: str | Path) -> list[dict[str, Any]]:
+    path = Path(dataset_root) / IMPORTED_SOURCES_PATH
+    if not path.exists():
+        return []
+    return [row for row in load_jsonl_rows(path) if str(row.get("text") or "").strip()]
+
+
 def load_jsonl_rows(path: str | Path) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     with Path(path).open("r", encoding="utf-8") as handle:
@@ -281,6 +346,120 @@ def build_longform_examples(
                 )
             )
     return examples
+
+
+def build_imported_source_examples(rows: Sequence[dict[str, Any]]) -> list[ConversationExample]:
+    examples: list[ConversationExample] = []
+    for row_index, row in enumerate(rows):
+        source_type = str(row.get("source_type") or "notes")
+        text = str(row.get("text") or "").strip()
+        if not text:
+            continue
+        title = str(row.get("title") or f"source-{row_index + 1}").strip()
+        if source_type == "longform":
+            longform_row = dict(row)
+            longform_row["rendered_text"] = text
+            longform_row.setdefault("title", title)
+            examples.extend(build_longform_examples([longform_row]))
+            continue
+        chunks = chunk_preserving_lines(
+            text,
+            max_words=140 if source_type == "poetry" else 120,
+            overlap_lines=1 if source_type == "poetry" else 0,
+        )
+        for chunk_index, chunk in enumerate(chunks or [text], start=1):
+            opening_text = pick_opening_preserving_lines(
+                chunk,
+                min_lines=1 if source_type == "poetry" else 0,
+                max_words=36,
+            )
+            example_id = f"{slugify_name(source_type)}-{slugify_name(title) or row_index + 1}-{chunk_index:02d}"
+            examples.append(
+                ConversationExample(
+                    example_id=example_id,
+                    opening_text=opening_text,
+                    target_text=chunk,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": build_imported_source_prompt(
+                                opening_text=opening_text,
+                                row=row,
+                                source_type=source_type,
+                            ),
+                        },
+                        {"role": "assistant", "content": chunk},
+                    ],
+                    metadata={
+                        "source_kind": source_type,
+                        "title": title,
+                        "color": row.get("color"),
+                        "labels": row.get("labels") or [],
+                        "word_count": len(chunk.split()),
+                    },
+                )
+            )
+    return examples
+
+
+def build_imported_source_prompt(*, opening_text: str, row: dict[str, Any], source_type: str) -> str:
+    title = str(row.get("title") or "").strip()
+    color = str(row.get("color") or "").strip()
+    labels = row.get("labels") or []
+    labels_text = ", ".join(str(item) for item in labels if str(item).strip())
+    if source_type == "poetry":
+        instruction = (
+            "Write the next lines of a poem in the target author's poetic voice. "
+            "Keep the opening exactly as given. Match lineation, image logic, and cadence."
+        )
+    elif source_type == "google_keep":
+        instruction = (
+            "Write or continue a note in the target author's private note-taking voice. "
+            "Preserve the practical, fragmentary, or reflective texture implied by the note metadata."
+        )
+    else:
+        instruction = (
+            "Continue this imported source in the target author's voice. "
+            "Match its format, density, and purpose."
+        )
+    context_lines = [
+        instruction,
+        f"Title: {title}" if title else "",
+        f"Color: {color}" if color else "",
+        f"Labels: {labels_text}" if labels_text else "",
+        "",
+        "Opening:",
+        opening_text,
+    ]
+    return "\n".join(line for line in context_lines if line).strip()
+
+
+def chunk_preserving_lines(text: str, *, max_words: int, overlap_lines: int = 0) -> list[str]:
+    lines = text.strip().splitlines()
+    chunks: list[str] = []
+    current: list[str] = []
+    current_words = 0
+    for line in lines:
+        line_words = len(line.split())
+        if current and current_words + line_words > max_words:
+            chunks.append("\n".join(current).strip())
+            current = current[-overlap_lines:] if overlap_lines else []
+            current_words = sum(len(item.split()) for item in current)
+        current.append(line)
+        current_words += line_words
+    if current:
+        chunks.append("\n".join(current).strip())
+    return [chunk for chunk in chunks if chunk]
+
+
+def pick_opening_preserving_lines(text: str, *, min_lines: int, max_words: int) -> str:
+    lines = [line for line in text.splitlines() if line.strip()]
+    if min_lines and len(lines) > 1:
+        return "\n".join(lines[:min(max(1, min_lines), len(lines))]).strip()
+    words = re.findall(r"\S+", text.strip())
+    if len(words) <= max_words:
+        return text.strip()
+    return " ".join(words[:max_words]).strip()
 
 
 def build_longform_user_prompt(

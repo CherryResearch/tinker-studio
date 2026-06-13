@@ -1,0 +1,46 @@
+{
+  "targeted": {
+    "label": "Targeted voice checks",
+    "description": "Openings aimed at the themes and cadence this run seems to be chasing.",
+    "prompts": [
+      "more like a technocapital",
+      "the thing about AI alignment is",
+      "every app now wants to be your",
+      "i think the real problem with copilot as a metaphor is",
+      "the internet keeps trying to turn taste into"
+    ]
+  },
+  "starter_terms": {
+    "label": "Starter terms",
+    "description": "Short, fragment-like openings that feel close to the tiny starts in the training prompts.",
+    "prompts": [
+      "Copilot",
+      "Technocapital",
+      "Alignment",
+      "Prompt engineering",
+      "Institutional vibes"
+    ]
+  },
+  "normal_sentences": {
+    "label": "Normal questions or sentences",
+    "description": "More natural openings that test whether the model can stay coherent without a hyper-compressed fragment.",
+    "prompts": [
+      "What are people actually asking for when they say they want AI to help them think?",
+      "I keep noticing that software products are starting to sound like little ideologies.",
+      "Why does every new tool promise creativity and then funnel you toward templates?",
+      "It feels like half of modern software is just a very elaborate way to avoid making a decision.",
+      "Maybe the weirdest part of the current AI moment is how quickly convenience becomes aesthetics."
+    ]
+  },
+  "user_reflections": {
+    "label": "User reflections",
+    "description": "Your own formulations and thesis-like lines, kept as prompts so the sampler can continue them.",
+    "prompts": [
+      "something to the tune of 'what would my ancestors do?'",
+      "that's because that's what they are. software is just data. architected data is, loosely, an ideology.",
+      "jevons paradox in a malthusian trap",
+      "the implicit decision is avoidance and deferral.",
+      "aesthetics are always convenient though"
+    ]
+  }
+}

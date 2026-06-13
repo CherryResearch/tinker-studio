@@ -1,0 +1,4 @@
+interface:
+  display_name: "Tinker Streamlit Dashboard"
+  short_description: "Launch and debug the Tinker Studio dashboard."
+  default_prompt: "Start or inspect the Tinker Studio Streamlit dashboard and verify its dataset, sources, evaluation, training, diagnostics, and endpoint panels."

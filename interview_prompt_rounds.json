@@ -1,0 +1,52 @@
+{
+  "ai_decision_support": {
+    "label": "AI as reassurance, thinking, and decision-support",
+    "description": "Prompts about what people claim to want from AI versus what they are often actually seeking.",
+    "theme": "AI reassurance / thinking / decision-support",
+    "questions": [
+      "What are people actually asking for when they say they want AI to help them think?",
+      "Where does the line sit between thinking, reassurance, and reinforcement?",
+      "What kind of decision-making muscle do you wish these tools strengthened instead of replacing?"
+    ]
+  },
+  "software_ideology": {
+    "label": "Software as ideology",
+    "description": "Prompts about systems, rules, and the ideological shape of software.",
+    "theme": "Software as ideology",
+    "questions": [
+      "Why do software products start to sound like little ideologies?",
+      "What kind of rules make a software system feel ideological rather than merely useful?",
+      "When does architecture become politics in miniature?"
+    ]
+  },
+  "convenience_aesthetics": {
+    "label": "Convenience, aesthetics, and deferral",
+    "description": "Prompts about templates, avoidance, convenience, and the top-down distribution of decision-making.",
+    "theme": "Convenience, aesthetics, and top-down decision avoidance",
+    "questions": [
+      "Why does every new tool promise creativity and then funnel people toward templates?",
+      "What is the implicit decision being made when software defers choices for the user?",
+      "What happens when convenience starts getting experienced as aesthetics?"
+    ]
+  },
+  "institutional_vibes": {
+    "label": "Institutional vibe systems",
+    "description": "Prompts about software, institutions, vibe governance, and ambient control.",
+    "theme": "Institutional vibe systems",
+    "questions": [
+      "What does it mean for an institution to become a vibe system instead of a deliberative one?",
+      "How do interfaces distribute permission, authority, or paralysis?",
+      "What kinds of products feel like governance in disguise?"
+    ]
+  },
+  "growth_traps": {
+    "label": "Growth traps, scarcity, and Jevons/Malthus",
+    "description": "Prompts about expansion, abundance narratives, and why efficiency can still deepen scarcity.",
+    "theme": "Growth traps, scarcity, and Jevons/Malthusian framing",
+    "questions": [
+      "What does Jevons paradox look like inside software and AI systems?",
+      "Why does more efficiency so often still feel like a Malthusian trap?",
+      "Where do abundance stories break against institutional scarcity?"
+    ]
+  }
+}
