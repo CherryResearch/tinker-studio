@@ -9,8 +9,8 @@ description: Prepare Tinker Studio changes for safe publication by checking Git 
 
 Use this before pushing or opening PRs from the Tinker Studio workspace. The intended split is:
 
-- Public or semi-public code/docs/dashboard/skills: publish through the main Tinker repo and later Cherry Research when appropriate.
-- Private data/storage: keep under `firecat1234`, usually as a nested repo inside `data/`.
+- Public or semi-public code/docs/dashboard/skills: publish through the main Tinker repo under Cherry Research when appropriate.
+- Private data/storage: keep ignored locally or in a separate private storage repo, usually as a nested repo inside `data/`.
 - Environment keys: keep in ignored `.env` or local secret stores only; never commit real values.
 
 ## Setup Checks
@@ -89,10 +89,10 @@ Use Git LFS or another storage strategy before pushing if files approach GitHub'
 
 ## Account Split
 
-- `cherry research`: ML-related, semi-professional public-facing blog, pseudo-startup, and computer-led research work.
-- `firecat1234`: personal projects and private/storage repos.
+- `CherryResearch`: ML-related, semi-professional public-facing blog, pseudo-startup, and computer-led research work.
+- Keep raw training data and local storage out of the main source repo unless the user explicitly chooses a reviewed storage path.
 
-Default to `firecat1234` for raw training data and local storage. Move polished public research/code to Cherry Research only after explicit user direction.
+Default to ignored local storage for raw training data. Move polished public research/code or reviewed private tooling to Cherry Research only after explicit user direction.
 
 ## Guardrails
 

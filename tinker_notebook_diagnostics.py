@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
+import urllib.error
+import urllib.parse
+import urllib.request
 
 import pandas as pd
 
 
+DEFAULT_NOTEBOOK_FILENAME = "tinker_train_and_eval.ipynb"
+NOTEBOOK_PATH_ENV_VARS = ("TINKER_NOTEBOOK_PATH", "NOTEBOOK_PATH")
 RUN_ID_PATTERN = re.compile(r"\b[0-9a-f]{8}-[0-9a-f-]{27}:(?:train|sample):\d+\b")
 
 
@@ -32,8 +38,48 @@ def unique_preserving_order(values: list[str | None]) -> list[str]:
     return ordered
 
 
-def extract_notebook_artifacts(notebook_path: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
-    path = Path(notebook_path).resolve()
+def resolve_notebook_path(
+    notebook_path: str | Path | None = None,
+    *,
+    notebook_filename: str = DEFAULT_NOTEBOOK_FILENAME,
+    search_root: str | Path | None = None,
+) -> Path:
+    candidates: list[Path] = []
+
+    if notebook_path:
+        candidates.append(Path(notebook_path))
+
+    for env_var in NOTEBOOK_PATH_ENV_VARS:
+        env_value = os.environ.get(env_var)
+        if env_value:
+            candidates.append(Path(env_value))
+
+    candidates.extend(_current_jupyter_notebook_paths())
+
+    for root in _candidate_search_roots(search_root):
+        candidates.append(root / notebook_filename)
+
+    searched: list[str] = []
+    for candidate in candidates:
+        resolved = _normalize_path(candidate)
+        if str(resolved) in searched:
+            continue
+        searched.append(str(resolved))
+        if resolved.is_file():
+            return resolved
+
+    searched_text = "\n".join(f"- {item}" for item in searched) or "- no candidates"
+    raise FileNotFoundError(
+        "Could not resolve the notebook path automatically. "
+        f"Set {NOTEBOOK_PATH_ENV_VARS[0]} or pass notebook_path explicitly.\n"
+        f"Searched:\n{searched_text}"
+    )
+
+
+def extract_notebook_artifacts(
+    notebook_path: str | Path | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    path = resolve_notebook_path(notebook_path)
     notebook = json.loads(path.read_text(encoding="utf-8"))
 
     artifact_rows: list[dict[str, Any]] = []
@@ -147,7 +193,7 @@ def list_recent_training_runs_df(rest_client: Any, *, limit: int = 20) -> pd.Dat
     return frame
 
 
-def recovered_tracking_state(notebook_path: str | Path) -> dict[str, list[str]]:
+def recovered_tracking_state(notebook_path: str | Path | None = None) -> dict[str, list[str]]:
     artifact_df, _ = extract_notebook_artifacts(notebook_path)
     if artifact_df.empty:
         return {
@@ -168,6 +214,99 @@ def recovered_tracking_state(notebook_path: str | Path) -> dict[str, list[str]]:
         "sampler_ids": unique_preserving_order(sampler_ids),
         "session_ids": unique_preserving_order(session_ids),
     }
+
+
+def _candidate_search_roots(search_root: str | Path | None) -> list[Path]:
+    roots: list[Path] = []
+    for raw_root in (search_root, Path.cwd(), Path(__file__).resolve().parent):
+        if raw_root is None:
+            continue
+        root = _normalize_path(Path(raw_root))
+        if root.is_file():
+            root = root.parent
+        for candidate in (root, *root.parents):
+            if candidate not in roots:
+                roots.append(candidate)
+    return roots
+
+
+def _normalize_path(path: Path) -> Path:
+    expanded = path.expanduser()
+    if not expanded.is_absolute():
+        expanded = Path.cwd() / expanded
+    try:
+        return expanded.resolve()
+    except OSError:
+        return expanded.absolute()
+
+
+def _current_jupyter_notebook_paths() -> list[Path]:
+    kernel_id = _current_jupyter_kernel_id()
+    if not kernel_id:
+        return []
+
+    paths: list[Path] = []
+    for server in _iter_running_jupyter_servers():
+        server_url = server.get("url")
+        if not server_url:
+            continue
+
+        sessions_url = urllib.parse.urljoin(str(server_url), "api/sessions")
+        token = server.get("token")
+        if token:
+            sessions_url = f"{sessions_url}?{urllib.parse.urlencode({'token': token})}"
+
+        try:
+            with urllib.request.urlopen(sessions_url, timeout=1.0) as response:
+                sessions = json.loads(response.read().decode("utf-8"))
+        except (OSError, urllib.error.URLError, json.JSONDecodeError):
+            continue
+
+        root_dir = server.get("root_dir") or server.get("notebook_dir")
+        if not root_dir:
+            continue
+
+        for session in sessions:
+            session_kernel_id = (session.get("kernel") or {}).get("id")
+            if session_kernel_id != kernel_id:
+                continue
+            notebook_info = session.get("notebook") or {}
+            notebook_relative_path = notebook_info.get("path") or session.get("path")
+            if notebook_relative_path:
+                paths.append(Path(root_dir) / str(notebook_relative_path))
+    return paths
+
+
+def _current_jupyter_kernel_id() -> str | None:
+    connection_file = None
+    try:
+        from IPython import get_ipython
+
+        ipython = get_ipython()
+        if ipython is not None:
+            connection_file = ipython.config.get("IPKernelApp", {}).get("connection_file")
+    except Exception:
+        connection_file = None
+
+    if not connection_file:
+        return None
+
+    stem = Path(str(connection_file)).stem
+    if stem.startswith("kernel-"):
+        return stem.removeprefix("kernel-")
+    return stem or None
+
+
+def _iter_running_jupyter_servers() -> list[dict[str, Any]]:
+    servers: list[dict[str, Any]] = []
+    for module_name in ("jupyter_server.serverapp", "notebook.notebookapp"):
+        try:
+            module = __import__(module_name, fromlist=["list_running_servers"])
+            list_running_servers = getattr(module, "list_running_servers")
+            servers.extend(dict(server) for server in list_running_servers())
+        except Exception:
+            continue
+    return servers
 
 
 def _flatten_output_text(output: dict[str, Any]) -> list[str]:

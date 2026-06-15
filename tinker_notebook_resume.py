@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from typing import Any
 
 import ipywidgets as widgets
@@ -9,6 +11,7 @@ from IPython.display import display
 
 
 ACTIVE_SECONDS_THRESHOLD = 30.0
+DEFAULT_RESUME_SELECTION_FILENAME = "selected_resume_config.json"
 
 
 @dataclass(frozen=True)
@@ -21,6 +24,66 @@ class ResumeSelection:
     num_checkpoints: int
     base_model: str | None
     lora_rank: int | None
+
+
+def default_resume_selection_path(workspace_root: str | Path | None = None) -> Path:
+    root = Path.cwd() if workspace_root is None else Path(workspace_root)
+    return root.resolve() / "run_outputs" / DEFAULT_RESUME_SELECTION_FILENAME
+
+
+def resume_selection_to_config(
+    selection: ResumeSelection | dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if selection is None:
+        return None
+    if isinstance(selection, ResumeSelection):
+        config = {
+            "training_run_id": selection.training_run_id,
+            "checkpoint_id": selection.checkpoint_id,
+            "tinker_path": selection.tinker_path,
+            "base_model": selection.base_model,
+            "lora_rank": selection.lora_rank,
+            "status": selection.status,
+            "seconds_since_last_request": selection.seconds_since_last_request,
+            "num_checkpoints": selection.num_checkpoints,
+        }
+    else:
+        config = dict(selection)
+
+    required_keys = ("training_run_id", "checkpoint_id", "tinker_path")
+    if not all(config.get(key) for key in required_keys):
+        return None
+
+    cleaned = {key: value for key, value in config.items() if value is not None}
+    cleaned["updated_at_utc"] = pd.Timestamp.now(tz="UTC").isoformat()
+    return cleaned
+
+
+def save_resume_selection(
+    selection: ResumeSelection | dict[str, Any] | None,
+    selection_path: str | Path | None = None,
+) -> dict[str, Any] | None:
+    config = resume_selection_to_config(selection)
+    if config is None:
+        return None
+
+    path = default_resume_selection_path() if selection_path is None else Path(selection_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
+    return config
+
+
+def load_resume_selection(selection_path: str | Path | None = None) -> dict[str, Any] | None:
+    path = default_resume_selection_path() if selection_path is None else Path(selection_path)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return resume_selection_to_config(payload)
 
 
 def classify_status(seconds_since_last_request: float | None) -> str:
@@ -169,9 +232,15 @@ def build_resume_selection(
     )
 
 
-def display_resume_selector(rest_client: Any, *, limit: int = 20) -> dict[str, Any]:
+def display_resume_selector(
+    rest_client: Any,
+    *,
+    limit: int = 20,
+    selection_path: str | Path | None = None,
+) -> dict[str, Any]:
     runs_df = list_resumable_runs_df(rest_client, limit=limit)
     resumable_df = runs_df[runs_df["num_checkpoints"] > 0].reset_index(drop=True)
+    saved_config = load_resume_selection(selection_path) if selection_path is not None else None
 
     title = widgets.HTML("<h3 style='margin:0'>Resume Tinker Run</h3>")
     help_text = widgets.HTML(
@@ -190,6 +259,8 @@ def display_resume_selector(rest_client: Any, *, limit: int = 20) -> dict[str, A
             "runs_df": runs_df,
             "resumable_df": resumable_df,
             "selection": None,
+            "config": saved_config,
+            "selection_path": selection_path,
             "output": output,
         }
 
@@ -203,7 +274,13 @@ def display_resume_selector(rest_client: Any, *, limit: int = 20) -> dict[str, A
         )
         run_options.append((label, str(row["training_run_id"])))
 
-    default_run_id = choose_default_run_id(resumable_df)
+    saved_run_id = str(saved_config["training_run_id"]) if saved_config else None
+    available_run_ids = {value for _, value in run_options}
+    default_run_id = (
+        saved_run_id
+        if saved_run_id in available_run_ids
+        else choose_default_run_id(resumable_df)
+    )
     run_dropdown = widgets.Dropdown(
         options=run_options,
         value=default_run_id,
@@ -223,6 +300,8 @@ def display_resume_selector(rest_client: Any, *, limit: int = 20) -> dict[str, A
         "selection": None,
         "runs_df": runs_df,
         "resumable_df": resumable_df,
+        "config": saved_config,
+        "selection_path": selection_path,
         "run_dropdown": run_dropdown,
         "checkpoint_dropdown": checkpoint_dropdown,
         "output": output,
@@ -237,10 +316,20 @@ def display_resume_selector(rest_client: Any, *, limit: int = 20) -> dict[str, A
         ]
         checkpoint_dropdown.options = checkpoint_options
         if checkpoint_options:
-            checkpoint_dropdown.value = checkpoint_options[-1][1]
+            saved_checkpoint_id = str(saved_config["checkpoint_id"]) if saved_config else None
+            checkpoint_ids = {value for _, value in checkpoint_options}
+            if (
+                saved_config
+                and saved_config.get("training_run_id") == selected_run_id
+                and saved_checkpoint_id in checkpoint_ids
+            ):
+                checkpoint_dropdown.value = saved_checkpoint_id
+            else:
+                checkpoint_dropdown.value = checkpoint_options[-1][1]
         refresh_output()
 
     def refresh_output(*_: Any) -> None:
+        nonlocal saved_config
         with output:
             output.clear_output(wait=True)
             selection = build_resume_selection(
@@ -251,8 +340,15 @@ def display_resume_selector(rest_client: Any, *, limit: int = 20) -> dict[str, A
             )
             selection_state["selection"] = selection
             if selection is None:
+                selection_state["config"] = None
                 print("No resume selection is available yet.")
                 return
+
+            config = resume_selection_to_config(selection)
+            if selection_path is not None:
+                config = save_resume_selection(selection, selection_path)
+            selection_state["config"] = config
+            saved_config = config
 
             row_df = pd.DataFrame(
                 [
@@ -274,6 +370,8 @@ def display_resume_selector(rest_client: Any, *, limit: int = 20) -> dict[str, A
             print(f"    'checkpoint_id': '{selection.checkpoint_id}',")
             print(f"    'tinker_path': '{selection.tinker_path}',")
             print("}")
+            if selection_path is not None:
+                print(f"Saved selection: {Path(selection_path)}")
 
     run_dropdown.observe(refresh_checkpoint_options, names="value")
     checkpoint_dropdown.observe(refresh_output, names="value")

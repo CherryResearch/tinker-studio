@@ -793,7 +793,7 @@ def render_header(manifest: dict[str, Any]) -> None:
         f"""
         <div class="hero">
             <h1>Tinker Studio</h1>
-            <p>Dataset freshness, Bluesky post corpus health, and recent training run telemetry in one local control surface.</p>
+            <p>Dataset freshness, source mix, and recent training run telemetry in one local control surface.</p>
             <p>Dataset snapshot age: <strong>{dataset_age(manifest)}</strong></p>
         </div>
         """,
@@ -823,9 +823,10 @@ def render_dataset_overview(posts: pd.DataFrame, manifest: dict[str, Any], rentr
     st.markdown(
         """
         <div class="soft-panel">
-            <strong>Data taxonomy:</strong> shortform is the Bluesky post corpus, long-form is chunked source documents
-            such as essays, and conversations are reply rows with parent/root context. Reply context is stored locally
-            and used in training prompts; the completion target remains only the authored post.
+            <strong>Data taxonomy:</strong> shortform comes from pulled Bluesky posts, long-form comes from chunked
+            essays and imported documents, interviews add direct Q&A plus post-style continuation prompts, and imported
+            local sources cover notes, poetry, Google Keep, and other private text. Reply context is stored locally and
+            used in training prompts; the completion target remains only the authored post.
         </div>
         """,
         unsafe_allow_html=True,
@@ -939,13 +940,23 @@ def render_sources_overview(rentry_rows: list[dict[str, Any]], imported_rows: li
         unsafe_allow_html=True,
     )
 
-    st.caption("Long-form is the general category; the current seed rows are just one imported document source.")
+    st.caption(
+        "This view covers chunked long-form seeds plus imported local sources such as notes, poetry, "
+        "Google Keep, and generic documents. Interview rows are mixed into training variants from "
+        "processed/interview_qa.jsonl."
+    )
+    st.info(
+        "Dataset sharing note: keep local imports private by default. If you want to contribute "
+        "data or evaluation cases to Float, use original or permissively licensed material, keep "
+        "source/license/consent notes, and email cherry.research@pm.me before sending files. "
+        "Storage will be coordinated separately if a dataset is worth review."
+    )
 
     source_tabs = st.tabs(["Long-Form Docs", "Imported Sources", "Import"])
     with source_tabs[0]:
         rentry_df = pd.DataFrame(rentry_rows)
         if rentry_df.empty:
-            st.info("No long-form seed rows found. Add long-form documents before using document-heavy variants.")
+            st.info("No long-form seed rows found. Add chunked essays or imported long-form documents before using document-heavy variants.")
         else:
             visible = [
                 col
@@ -957,7 +968,7 @@ def render_sources_overview(rentry_rows: list[dict[str, Any]], imported_rows: li
     with source_tabs[1]:
         imported_df = pd.DataFrame(imported_rows)
         if imported_df.empty:
-            st.info("No imported notes or poetry yet. Use the Import tab to build local imported_sources.jsonl.")
+            st.info("No imported notes, poetry, Google Keep rows, or local documents yet. Use the Import tab to build local imported_sources.jsonl.")
         else:
             visible = [
                 col
@@ -967,7 +978,10 @@ def render_sources_overview(rentry_rows: list[dict[str, Any]], imported_rows: li
             st.dataframe(imported_df[visible], width="stretch", hide_index=True)
 
     with source_tabs[2]:
-        st.caption("Imports are written into the ignored dataset folder so private notes stay local by default.")
+        st.caption(
+            "Imports are written into the ignored dataset folder so private notes stay local by "
+            "default. Public/shared data needs explicit provenance and a permissive license."
+        )
         input_path = st.text_input(
             "Input file or folder",
             placeholder=r"C:\Users\you\Takeout\Keep",

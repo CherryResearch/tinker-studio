@@ -14,7 +14,7 @@ Prefer read-only inspection first. Use the workspace virtual environment when it
 ## Setup And Safety
 
 - Resolve data through `find_dataset_root(Path.cwd())`; it prefers `TINKER_STUDIO_DATASET_ROOT`, `TINKER_DATASET_ROOT`, then `data\training_data_cerise`.
-- Treat `data\training_data_cerise` as private storage. It should be ignored by the main Tinker repo and may be its own private `firecat1234` repo.
+- Treat `data\training_data_cerise` as private storage. It should be ignored by the main Tinker repo and may be its own separate private storage repo.
 - Do not print or commit real env values. `.env.example` may contain empty placeholders and relative dataset paths only.
 
 ## Quick Start

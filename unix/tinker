@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
+ROOT=$(CDPATH= cd "$SCRIPT_DIR/.." && pwd)
+
+if [ -x "$ROOT/tinker_env/bin/python" ]; then
+  PYTHON="$ROOT/tinker_env/bin/python"
+elif [ -x "$ROOT/.venv/bin/python" ]; then
+  PYTHON="$ROOT/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+else
+  PYTHON=python
+fi
+
+exec "$PYTHON" "$ROOT/tinker_launcher.py" "$@"
