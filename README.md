@@ -28,10 +28,9 @@ the authored post only.
 **Chunked long-form text**
 
 Essays and long documents are split into overlapping continuation examples
-instead of being used as one giant sample. The current long-form seed path is
-`processed/rentry_pages.jsonl`, and imported long-form rows can also be written
-through the source importer. These examples are mixed into essay-heavy variants
-such as `recent_posts_plus_essays`.
+instead of being used as one giant sample. Markdown seed rows and imported
+long-form rows can be written through the source importer. These examples are
+mixed into essay-heavy variants such as `recent_posts_plus_essays`.
 
 **Interview Q&A**
 
@@ -150,7 +149,7 @@ The experiment manager currently builds these dataset variants:
 - `initial_posts`: original chronological post-only split with held-out
   validation and test rows.
 - `recent_posts_plus_essays`: initial posts plus later Bluesky posts and
-  chunked essay/Rentry examples.
+  chunked essay/markdown examples.
 - `recent_posts_essays_interview`: the above plus a balanced interview-derived
   mix of direct Q&A and post-style continuation examples.
 - `personal_sources_mix`: recent posts, essays, interview rows, and local
@@ -171,3 +170,5 @@ folders, and strip notebook outputs.
 Codex skills are packaged in [codex_skills](codex_skills/README.md), including
 dashboard, dataset planning, interview collection, training, monitoring, and
 notebook recovery workflows.
+
+Near-term product and corpus priorities are tracked in [ROADMAP.md](ROADMAP.md).
