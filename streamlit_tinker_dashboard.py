@@ -57,6 +57,8 @@ IMPORTED_SOURCES_PATH = DATASET_ROOT / "processed" / "imported_sources.jsonl"
 SOURCE_IMPORTER_PATH = WORKSPACE_ROOT / "tinker_source_imports.py"
 ENDPOINT_BASE_URL = "http://localhost:8765/v1"
 ENDPOINT_PORT = 8765
+IMPORTABLE_SOURCE_EXTENSIONS = {".txt", ".md", ".markdown", ".json", ".jsonl", ".ndjson", ".csv", ".tsv"}
+SOURCE_EXPORTS_ENV = "TINKER_STUDIO_SOURCE_EXPORTS_JSON"
 
 
 st.set_page_config(
@@ -105,7 +107,7 @@ def apply_theme() -> None:
             color: #f8eddb;
         }
         h1, h2, h3 {
-            letter-spacing: -0.045em;
+            letter-spacing: 0;
             color: var(--ink);
         }
         div[data-testid="stMetric"] {
@@ -145,6 +147,11 @@ def apply_theme() -> None:
         div[data-baseweb="tab-list"] button p {
             color: var(--ink) !important;
             font-weight: 750;
+            white-space: nowrap;
+        }
+        div[data-baseweb="tab-list"] {
+            overflow-x: auto;
+            scrollbar-width: thin;
         }
         div[data-baseweb="input"] input,
         div[data-baseweb="textarea"] textarea {
@@ -214,9 +221,45 @@ def apply_theme() -> None:
             font-size: 0.86rem;
             font-weight: 700;
         }
+        .metric-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+            gap: 0.75rem;
+            margin: 0.9rem 0 1rem;
+        }
+        .metric-card {
+            padding: 0.85rem 0.9rem;
+            border-radius: 8px;
+            background: rgba(255, 250, 240, 0.78);
+            border: 1px solid rgba(21, 17, 12, 0.12);
+            box-shadow: 0 10px 28px rgba(79, 54, 24, 0.08);
+            min-width: 0;
+        }
+        .metric-card-label {
+            color: rgba(21, 17, 12, 0.62);
+            font-size: 0.84rem;
+            font-weight: 760;
+            line-height: 1.25;
+            overflow-wrap: anywhere;
+        }
+        .metric-card-value {
+            color: var(--clay);
+            font-size: 2rem;
+            line-height: 1.05;
+            font-weight: 850;
+            margin-top: 0.35rem;
+            overflow-wrap: anywhere;
+        }
+        .metric-card-detail {
+            color: rgba(21, 17, 12, 0.56);
+            font-size: 0.78rem;
+            line-height: 1.3;
+            margin-top: 0.35rem;
+            overflow-wrap: anywhere;
+        }
         .hero {
             padding: 1.4rem 1.6rem;
-            border-radius: 24px;
+            border-radius: 8px;
             background:
                 linear-gradient(120deg, rgba(21, 17, 12, 0.94), rgba(69, 55, 39, 0.92)),
                 radial-gradient(circle at top right, rgba(186, 86, 50, 0.35), transparent 18rem);
@@ -227,8 +270,8 @@ def apply_theme() -> None:
         .hero h1 {
             margin: 0;
             color: #fff4df;
-            font-size: 3.1rem;
-            line-height: 0.95;
+            font-size: 2.6rem;
+            line-height: 1;
         }
         .hero p {
             color: rgba(255, 244, 223, 0.76);
@@ -241,6 +284,32 @@ def apply_theme() -> None:
             border-radius: 16px;
             background: rgba(255, 250, 240, 0.58);
             margin: 0.7rem 0 1rem;
+        }
+        .reader-meta {
+            color: rgba(21, 17, 12, 0.62);
+            font-size: 0.9rem;
+            overflow-wrap: anywhere;
+        }
+        @media (max-width: 720px) {
+            .hero {
+                padding: 1rem;
+            }
+            .hero h1 {
+                font-size: 2rem;
+            }
+            .hero p {
+                font-size: 0.95rem;
+            }
+            .metric-grid {
+                grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+                gap: 0.55rem;
+            }
+            .metric-card {
+                padding: 0.7rem;
+            }
+            .metric-card-value {
+                font-size: 1.55rem;
+            }
         }
         .soft-panel strong {
             color: var(--ink);
@@ -308,6 +377,100 @@ def load_jsonl(path: Path) -> list[dict[str, Any]]:
                     continue
                 if isinstance(row, dict):
                     rows.append(row)
+    return rows
+
+
+@st.cache_data(ttl=30)
+def inspect_source_export(path_string: str, recursive: bool) -> dict[str, Any]:
+    path = Path(path_string)
+    if not path.exists():
+        return {
+            "exists": False,
+            "importable_files": 0,
+            "markdown_files": 0,
+            "pdf_files": 0,
+            "latest_modified": "-",
+        }
+    candidates = path.rglob("*") if recursive and path.is_dir() else path.glob("*") if path.is_dir() else [path]
+    importable_files = 0
+    markdown_files = 0
+    pdf_files = 0
+    latest_mtime = 0.0
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        suffix = candidate.suffix.lower()
+        if suffix in IMPORTABLE_SOURCE_EXTENSIONS:
+            importable_files += 1
+        if suffix in {".md", ".markdown"}:
+            markdown_files += 1
+        if suffix == ".pdf":
+            pdf_files += 1
+        try:
+            latest_mtime = max(latest_mtime, candidate.stat().st_mtime)
+        except OSError:
+            pass
+    latest_modified = "-"
+    if latest_mtime:
+        latest_modified = datetime.fromtimestamp(latest_mtime).strftime("%Y-%m-%d %H:%M")
+    return {
+        "exists": True,
+        "importable_files": importable_files,
+        "markdown_files": markdown_files,
+        "pdf_files": pdf_files,
+        "latest_modified": latest_modified,
+    }
+
+
+def configured_source_exports() -> list[dict[str, Any]]:
+    raw_value = os.environ.get(SOURCE_EXPORTS_ENV, "").strip()
+    if not raw_value:
+        return []
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    exports: list[dict[str, Any]] = []
+    for index, item in enumerate(parsed, start=1):
+        if not isinstance(item, dict):
+            continue
+        path_value = str(item.get("path") or "").strip()
+        if not path_value:
+            continue
+        exports.append(
+            {
+                "name": str(item.get("name") or f"Source export {index}"),
+                "path": Path(path_value).expanduser(),
+                "source_type": str(item.get("source_type") or "auto"),
+                "recursive": bool(item.get("recursive", True)),
+                "exclude_names": str(item.get("exclude_names") or ""),
+            }
+        )
+    return exports
+
+
+def known_source_export_rows() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for source in configured_source_exports():
+        path = source["path"]
+        recursive = bool(source["recursive"])
+        summary = inspect_source_export(str(path), recursive)
+        rows.append(
+            {
+                "source": source["name"],
+                "path": str(path),
+                "exists": summary["exists"],
+                "importable_files": summary["importable_files"],
+                "markdown_files": summary["markdown_files"],
+                "pdf_files": summary["pdf_files"],
+                "latest_modified": summary["latest_modified"],
+                "recommended_source_type": source["source_type"],
+                "recursive": recursive,
+                "exclude_names": source["exclude_names"],
+            }
+        )
     return rows
 
 
@@ -456,6 +619,17 @@ def format_timestamp(value: Any) -> str:
 
 
 def parse_run_timestamp(value: Any) -> datetime | None:
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return None
+        timestamp = value.to_pydatetime()
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=timezone.utc)
+        return timestamp.astimezone(timezone.utc)
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
     if not isinstance(value, str) or not value.strip():
         return None
     stripped = value.strip()
@@ -474,7 +648,7 @@ def parse_run_timestamp(value: Any) -> datetime | None:
 
 def format_run_date(value: Any) -> str:
     timestamp = parse_run_timestamp(value)
-    return timestamp.strftime("%d-%m-%y") if timestamp else "undated"
+    return timestamp.strftime("%Y-%m-%d") if timestamp else "undated"
 
 
 def format_run_datetime(value: Any) -> str:
@@ -499,6 +673,14 @@ def extract_rank_from_run_name(run_name: str) -> str:
     return match.group(1) if match else ""
 
 
+def short_model_name(value: str) -> str:
+    return value.rsplit("/", 1)[-1] if value else "model"
+
+
+def humanize_variant_name(value: str) -> str:
+    return value.replace("_", " ").strip() or "dataset"
+
+
 def run_display_name(payload: dict[str, Any] | None) -> str:
     if not isinstance(payload, dict):
         return "unknown local run"
@@ -514,13 +696,37 @@ def run_display_name(payload: dict[str, Any] | None) -> str:
     rank = str(payload.get("lora_rank") or summary.get("lora_rank") or extract_rank_from_run_name(run_name))
     learning_rate = format_learning_rate(payload.get("learning_rate") or summary.get("learning_rate"))
     date_label = format_run_date(payload.get("started_at_utc") or payload.get("completed_at_utc"))
-    parts = [date_label, model_name]
+    parts = [date_label, short_model_name(model_name)]
     if rank:
         parts.append(f"r{rank}")
     if learning_rate:
         parts.append(f"lr{learning_rate}")
-    parts.append(variant)
+    parts.append(humanize_variant_name(variant))
     return " ".join(parts)
+
+
+def api_run_display_name(row: pd.Series) -> str:
+    timestamp = format_run_date(row.get("last_request_time_utc"))
+    model = short_model_name(str(row.get("base_model") or "model"))
+    rank = str(row.get("lora_rank") or "").strip()
+    run_id = str(row.get("training_run_id") or "")
+    short_id = run_id.split(":", 1)[0][:8] if run_id else "unknown"
+    parts = [timestamp, model]
+    if rank and rank.lower() != "nan":
+        parts.append(f"r{rank}")
+    parts.append(short_id)
+    return " ".join(parts)
+
+
+def decorate_api_runs(api_runs: pd.DataFrame) -> pd.DataFrame:
+    if api_runs.empty:
+        return api_runs
+    frame = api_runs.copy()
+    frame.insert(0, "run_label", frame.apply(api_run_display_name, axis=1))
+    if "status" in frame.columns:
+        frame.insert(1, "state", frame["status"].fillna("UNKNOWN").astype(str).str.upper())
+    return frame
+
 
 
 def last_update_label(payload: dict[str, Any]) -> str:
@@ -559,6 +765,148 @@ def render_status_card(label: str, value: str, detail: str = "") -> None:
         """,
         unsafe_allow_html=True,
     )
+
+
+def render_metric_grid(metrics: list[dict[str, str]]) -> None:
+    cards = []
+    for metric in metrics:
+        cards.append(
+            '<div class="metric-card">'
+            f'<div class="metric-card-label">{escape(str(metric.get("label") or ""))}</div>'
+            f'<div class="metric-card-value">{escape(str(metric.get("value") or ""))}</div>'
+            f'<div class="metric-card-detail">{escape(str(metric.get("detail") or ""))}</div>'
+            "</div>"
+        )
+    st.markdown(f'<div class="metric-grid">{"".join(cards)}</div>', unsafe_allow_html=True)
+
+
+def normalize_tag_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_values = re.split(r"[,;\n]", value)
+    elif isinstance(value, list):
+        raw_values = []
+        for item in value:
+            if isinstance(item, dict):
+                raw_values.append(str(item.get("name") or item.get("label") or ""))
+            else:
+                raw_values.append(str(item))
+    else:
+        raw_values = [str(value)]
+    tags: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        tag = raw.strip()
+        if not tag:
+            continue
+        if tag not in seen:
+            tags.append(tag)
+            seen.add(tag)
+    return tags
+
+
+def row_tags(row: dict[str, Any], *, defaults: list[str] | None = None) -> list[str]:
+    tags = normalize_tag_list(row.get("tags") or row.get("labels"))
+    source_type = str(row.get("source_type") or "").strip()
+    fallback_tags = [] if tags else [source_type]
+    for tag in [*(defaults or []), *fallback_tags]:
+        if tag and tag not in tags:
+            tags.append(tag)
+    return tags
+
+
+def source_tag_counts(
+    posts: pd.DataFrame,
+    rentry_rows: list[dict[str, Any]],
+    imported_rows: list[dict[str, Any]],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+
+    def add(tag: str, count: int = 1) -> None:
+        if tag:
+            counts[tag] = counts.get(tag, 0) + count
+
+    if not posts.empty:
+        add("bluesky", len(posts))
+        if "is_reply" in posts.columns:
+            reply_mask = posts["is_reply"].astype(str).str.lower().isin(["true", "1"])
+            reply_count = int(reply_mask.sum())
+            add("reply", reply_count)
+            add("post", max(0, len(posts) - reply_count))
+        else:
+            add("post", len(posts))
+
+    for _ in rentry_rows:
+        add("writing")
+        add("markdown")
+        add("longform")
+    for row in imported_rows:
+        for tag in row_tags(row):
+            add(tag)
+    return dict(sorted(counts.items()))
+
+
+def readable_source_rows(rentry_rows: list[dict[str, Any]], imported_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for index, row in enumerate(rentry_rows):
+        text = str(row.get("rendered_text") or row.get("text") or "").strip()
+        if not text:
+            continue
+        title = str(row.get("title") or f"Markdown source {index + 1}").strip()
+        tags = row_tags(row, defaults=["writing", "markdown", "longform"])
+        rows.append(
+            {
+                "key": f"markdown::{row.get('url') or title}",
+                "kind": "writing",
+                "title": title,
+                "text": text,
+                "tags": tags,
+                "word_count": row.get("word_count") or len(text.split()),
+                "path": "processed markdown source",
+                "editable": False,
+                "row": row,
+            }
+        )
+    for index, row in enumerate(imported_rows):
+        text = str(row.get("text") or row.get("rendered_text") or "").strip()
+        if not text:
+            continue
+        title = str(row.get("title") or f"Imported source {index + 1}").strip()
+        tags = row_tags(row)
+        rows.append(
+            {
+                "key": str(row.get("id") or f"imported::{index}::{title}"),
+                "kind": "writing",
+                "title": title,
+                "text": text,
+                "tags": tags,
+                "labels": normalize_tag_list(row.get("labels")),
+                "word_count": row.get("word_count") or len(text.split()),
+                "path": str(row.get("source_path") or ""),
+                "editable": True,
+                "row": row,
+            }
+        )
+    return rows
+
+
+def write_imported_source_labels(row_id: str, labels: list[str]) -> bool:
+    if not IMPORTED_SOURCES_PATH.exists():
+        return False
+    rows = load_jsonl(IMPORTED_SOURCES_PATH)
+    updated = False
+    for row in rows:
+        if str(row.get("id") or "") == row_id:
+            row["labels"] = labels
+            updated = True
+            break
+    if not updated:
+        return False
+    with IMPORTED_SOURCES_PATH.open("w", encoding="utf-8", newline="\n") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    return True
 
 
 def dataset_age(manifest: dict[str, Any]) -> str:
@@ -621,7 +969,18 @@ def run_powershell(command: str, *, timeout: int = 12) -> str:
     return run_local_command(["powershell", "-NoProfile", "-Command", command], timeout=timeout)
 
 
-def run_source_import(input_path: str, source_type: str, mode: str, label: str) -> tuple[int, str]:
+def split_exclude_names(value: str) -> list[str]:
+    return [item.strip() for item in re.split(r"[\n;]", value) if item.strip()]
+
+
+def run_source_import(
+    input_path: str,
+    source_type: str,
+    mode: str,
+    label: str,
+    recursive: bool,
+    exclude_names: list[str],
+) -> tuple[int, str]:
     command = [
         sys.executable,
         str(SOURCE_IMPORTER_PATH),
@@ -632,7 +991,10 @@ def run_source_import(input_path: str, source_type: str, mode: str, label: str) 
         "--source-type",
         source_type,
         f"--{mode}",
+        "--recursive" if recursive else "--no-recursive",
     ]
+    for name in exclude_names:
+        command.extend(["--exclude-name", name])
     if label.strip():
         command.extend(["--label", label.strip()])
     completed = subprocess.run(
@@ -647,7 +1009,14 @@ def run_source_import(input_path: str, source_type: str, mode: str, label: str) 
     return completed.returncode, output.strip()
 
 
-def run_source_preview(input_path: str, source_type: str, mode: str, label: str) -> tuple[int, str]:
+def run_source_preview(
+    input_path: str,
+    source_type: str,
+    mode: str,
+    label: str,
+    recursive: bool,
+    exclude_names: list[str],
+) -> tuple[int, str]:
     command = [
         sys.executable,
         str(SOURCE_IMPORTER_PATH),
@@ -658,8 +1027,11 @@ def run_source_preview(input_path: str, source_type: str, mode: str, label: str)
         "--source-type",
         source_type,
         f"--{mode}",
+        "--recursive" if recursive else "--no-recursive",
         "--preview",
     ]
+    for name in exclude_names:
+        command.extend(["--exclude-name", name])
     if label.strip():
         command.extend(["--label", label.strip()])
     completed = subprocess.run(
@@ -793,7 +1165,7 @@ def render_header(manifest: dict[str, Any]) -> None:
         f"""
         <div class="hero">
             <h1>Tinker Studio</h1>
-            <p>Dataset freshness, source mix, and recent training run telemetry in one local control surface.</p>
+            <p>Corpus readiness, source coverage, and recent training run telemetry in one local control surface.</p>
             <p>Dataset snapshot age: <strong>{dataset_age(manifest)}</strong></p>
         </div>
         """,
@@ -801,7 +1173,12 @@ def render_header(manifest: dict[str, Any]) -> None:
     )
 
 
-def render_dataset_overview(posts: pd.DataFrame, manifest: dict[str, Any], rentry_rows: list[dict[str, Any]]) -> None:
+def render_dataset_overview(
+    posts: pd.DataFrame,
+    manifest: dict[str, Any],
+    rentry_rows: list[dict[str, Any]],
+    imported_rows: list[dict[str, Any]],
+) -> None:
     counts = manifest.get("counts") if isinstance(manifest.get("counts"), dict) else {}
     latest_post = "-"
     latest_post_metric = "-"
@@ -812,232 +1189,358 @@ def render_dataset_overview(posts: pd.DataFrame, manifest: dict[str, Any], rentr
         latest_post_metric = latest_ts.strftime("%Y-%m-%d") if not pd.isna(latest_ts) else "-"
         earliest_post = format_timestamp(posts["created_at_ts"].min())
 
-    metric_cols = st.columns(5)
-    metric_cols[0].metric("Post rows", f"{int(counts.get('all_post_rows') or len(posts)):,}")
-    metric_cols[1].metric("Training rows", f"{int(counts.get('non_empty_training_rows') or 0):,}")
-    metric_cols[2].metric("Replies with context", f"{int(counts.get('reply_rows_with_context') or 0):,}")
-    metric_cols[3].metric("Long-form docs", f"{len(rentry_rows):,}")
-    metric_cols[4].metric("Latest post", latest_post_metric)
+    render_metric_grid(
+        [
+            {"label": "Media rows", "value": f"{int(counts.get('all_post_rows') or len(posts)):,}", "detail": "currently Bluesky"},
+            {"label": "Trainable rows", "value": f"{int(counts.get('non_empty_training_rows') or 0):,}", "detail": "base split"},
+            {"label": "Reply context", "value": f"{int(counts.get('reply_rows_with_context') or 0):,}", "detail": "conversation tags"},
+            {"label": "Source docs", "value": f"{len(rentry_rows) + len(imported_rows):,}", "detail": "markdown + imports"},
+            {"label": "Tags", "value": f"{len(source_tag_counts(posts, rentry_rows, imported_rows)):,}", "detail": "computed + user labels"},
+            {"label": "Latest media", "value": latest_post_metric, "detail": "snapshot timestamp"},
+        ]
+    )
 
     st.caption(f"Corpus range: {earliest_post} to {latest_post}")
     st.markdown(
         """
         <div class="soft-panel">
-            <strong>Data taxonomy:</strong> shortform comes from pulled Bluesky posts, long-form comes from chunked
-            essays and imported documents, interviews add direct Q&A plus post-style continuation prompts, and imported
-            local sources cover notes, poetry, Google Keep, and other private text. Reply context is stored locally and
-            used in training prompts; the completion target remains only the authored post.
+            <strong>Corpus model:</strong> sources are organized into three families: <strong>posts</strong>
+            with reply structure and metadata, <strong>writing</strong> from markdown documents with variable
+            user tags, and future <strong>traces</strong> for curated tool/reasoning workflows. Traces are a
+            planned corpus family, not random local chat import.
         </div>
         """,
         unsafe_allow_html=True,
     )
 
+    known_export_rows = known_source_export_rows()
+    detected_importable = sum(int(row["importable_files"]) for row in known_export_rows if row["exists"])
+    if detected_importable and not imported_rows:
+        st.warning(
+            "Local exported writing folders were detected, but no imported source rows are loaded. "
+            "The personal source training mix will omit those markdowns until they are imported."
+        )
+
     if posts.empty:
         st.warning(f"No posts found at {POSTS_CSV_PATH}")
         return
 
-    monthly_activity = pd.DataFrame()
-    if "created_at_ts" in posts.columns:
-        dated_posts = posts.dropna(subset=["created_at_ts"]).copy()
-        if not dated_posts.empty:
-            dated_posts["month"] = (
-                pd.to_datetime(dated_posts["created_at_ts"], errors="coerce", utc=True)
-                .dt.tz_convert(None)
-                .dt.to_period("M")
-                .dt.to_timestamp()
-            )
-            engagement_aliases = {
-                "like_count": "likes",
-                "reply_count": "replies",
-                "repost_count": "reposts",
-                "quote_count": "quotes",
-            }
-            aggregate_spec: dict[str, tuple[str, str]] = {"posts": ("created_at_ts", "size")}
-            for source_column, display_column in engagement_aliases.items():
-                if source_column in dated_posts.columns:
-                    dated_posts[source_column] = pd.to_numeric(dated_posts[source_column], errors="coerce").fillna(0)
-                    aggregate_spec[display_column] = (source_column, "sum")
-            monthly_activity = dated_posts.groupby("month").agg(**aggregate_spec).reset_index()
 
-    tab_volume, tab_engagement, tab_explorer = st.tabs(["Volume", "Engagement", "Post Explorer"])
-
-    with tab_volume:
-        if monthly_activity.empty:
-            st.info("No timestamped posts were found for the monthly volume chart.")
-        else:
-            st.bar_chart(monthly_activity, x="month", y="posts", color="#ba5632", width="stretch")
-
-    with tab_engagement:
-        engagement_columns = [col for col in ["like_count", "reply_count", "repost_count", "quote_count"] if col in posts.columns]
-        if engagement_columns:
-            totals = posts[engagement_columns].apply(pd.to_numeric, errors="coerce").fillna(0).sum()
-            metric_labels = {
-                "like_count": "Total likes",
-                "reply_count": "Total replies",
-                "repost_count": "Total reposts",
-                "quote_count": "Total quotes",
-            }
-            total_cols = st.columns(len(engagement_columns))
-            for index, column in enumerate(engagement_columns):
-                total_cols[index].metric(metric_labels.get(column, column), f"{int(totals[column]):,}")
-
-            if monthly_activity.empty:
-                st.info("No timestamped posts were found for monthly engagement.")
-            else:
-                chart_columns = [col for col in ["posts", "likes", "replies", "reposts", "quotes"] if col in monthly_activity.columns]
-                st.caption("Monthly totals. Posts are included so engagement can be read against posting volume.")
-                st.line_chart(monthly_activity, x="month", y=chart_columns, width="stretch")
-        else:
-            st.info("No engagement columns were found in the processed post export.")
-
-    with tab_explorer:
-        query = st.text_input(
-            "Search post text",
-            placeholder="filter by phrase, tag, or topic",
-            key="dataset_post_search",
-        )
-        only_replies = st.toggle("Replies only", value=False, key="dataset_replies_only")
-        show_reply_context = st.toggle(
-            "Show reply context columns",
-            value=True,
-            key="dataset_show_reply_context",
-            help="Shows the parent/root text captured for replies when available.",
-        )
-        explorer = posts.copy()
-        if query and "text" in explorer.columns:
-            explorer = explorer[explorer["text"].fillna("").astype(str).str.contains(query, case=False, na=False)]
-        if only_replies and "is_reply" in explorer.columns:
-            explorer = explorer[explorer["is_reply"].astype(str).str.lower().isin(["true", "1"])]
-        if "created_at_ts" in explorer.columns:
-            explorer = explorer.sort_values("created_at_ts", ascending=False, na_position="last")
-        base_columns = [
-            col
-            for col in ["created_at", "text", "is_reply", "has_reply_context", "like_count", "reply_count", "repost_count", "quote_count", "uri"]
-            if col in explorer.columns
-        ]
-        context_columns = [
-            col
-            for col in ["reply_context_text", "parent_author", "parent_text", "root_author", "root_text"]
-            if col in explorer.columns
-        ]
-        visible_columns = base_columns + (context_columns if show_reply_context else [])
-        if context_columns:
-            st.caption("Reply-context fields show what the post was responding to. Empty cells mean no bounded context was available.")
-        st.dataframe(explorer[visible_columns].head(100), width="stretch", hide_index=True)
-
-
-def render_sources_overview(rentry_rows: list[dict[str, Any]], imported_rows: list[dict[str, Any]]) -> None:
-    st.markdown("### Source Mix")
-    source_counts: dict[str, int] = {"longform_seed": len(rentry_rows)}
-    for row in imported_rows:
-        source_type = str(row.get("source_type") or "imported")
-        source_counts[source_type] = source_counts.get(source_type, 0) + 1
+def render_sources_overview(posts: pd.DataFrame, rentry_rows: list[dict[str, Any]], imported_rows: list[dict[str, Any]]) -> None:
+    st.markdown("### Sources")
+    tag_counts = source_tag_counts(posts, rentry_rows, imported_rows)
     st.markdown(
         "".join(
-            f'<span class="source-pill">{escape(source)}: {count}</span>'
-            for source, count in sorted(source_counts.items())
+            f'<span class="source-pill">{escape(tag)}: {count}</span>'
+            for tag, count in tag_counts.items()
         ),
         unsafe_allow_html=True,
     )
+    known_exports = known_source_export_rows()
+    detected_importable = sum(int(row["importable_files"]) for row in known_exports if row["exists"])
+    if detected_importable and not imported_rows:
+        st.warning(
+            "Detected local markdown exports that are not represented in imported_sources.jsonl. "
+            "Import them before using personal_sources_mix for a larger run."
+        )
+    elif imported_rows:
+        st.success(f"Loaded {len(imported_rows):,} imported source rows from {IMPORTED_SOURCES_PATH}.")
 
-    st.caption(
-        "This view covers chunked long-form seeds plus imported local sources such as notes, poetry, "
-        "Google Keep, and generic documents. Interview rows are mixed into training variants from "
-        "processed/interview_qa.jsonl."
-    )
-    st.info(
-        "Dataset sharing note: keep local imports private by default. If you want to contribute "
-        "data or evaluation cases to Float, use original or permissively licensed material, keep "
-        "source/license/consent notes, and email cherry.research@pm.me before sending files. "
-        "Storage will be coordinated separately if a dataset is worth review."
-    )
-
-    source_tabs = st.tabs(["Long-Form Docs", "Imported Sources", "Import"])
+    source_tabs = st.tabs(["Inventory", "Reader", "Import"])
     with source_tabs[0]:
-        rentry_df = pd.DataFrame(rentry_rows)
-        if rentry_df.empty:
-            st.info("No long-form seed rows found. Add chunked essays or imported long-form documents before using document-heavy variants.")
-        else:
-            visible = [
-                col
-                for col in ["title", "url", "word_count", "char_count", "fetched_at_utc"]
-                if col in rentry_df.columns
-            ]
-            st.dataframe(rentry_df[visible], width="stretch", hide_index=True)
-
+        render_source_inventory(posts, rentry_rows, imported_rows, known_exports)
     with source_tabs[1]:
-        imported_df = pd.DataFrame(imported_rows)
-        if imported_df.empty:
-            st.info("No imported notes, poetry, Google Keep rows, or local documents yet. Use the Import tab to build local imported_sources.jsonl.")
-        else:
-            visible = [
-                col
-                for col in ["source_type", "title", "color", "labels", "word_count", "source_path"]
-                if col in imported_df.columns
-            ]
-            st.dataframe(imported_df[visible], width="stretch", hide_index=True)
-
+        render_source_reader(rentry_rows, imported_rows)
     with source_tabs[2]:
-        st.caption(
-            "Imports are written into the ignored dataset folder so private notes stay local by "
-            "default. Public/shared data needs explicit provenance and a permissive license."
+        render_source_import_controls()
+
+
+def render_source_inventory(
+    posts: pd.DataFrame,
+    rentry_rows: list[dict[str, Any]],
+    imported_rows: list[dict[str, Any]],
+    known_exports: list[dict[str, Any]],
+) -> None:
+    render_inventory_reader_shortcut(rentry_rows, imported_rows)
+    inventory_tabs = st.tabs(["Posts", "Writing", "Local Exports"])
+    with inventory_tabs[0]:
+        render_post_inventory(posts)
+    with inventory_tabs[1]:
+        render_writing_inventory(rentry_rows, imported_rows)
+    with inventory_tabs[2]:
+        st.dataframe(pd.DataFrame(known_exports), width="stretch", hide_index=True)
+
+
+def render_inventory_reader_shortcut(rentry_rows: list[dict[str, Any]], imported_rows: list[dict[str, Any]]) -> None:
+    readable_rows = sorted(
+        readable_source_rows(rentry_rows, imported_rows),
+        key=lambda row: (0 if row["editable"] else 1, str(row["title"]).lower()),
+    )
+    if not readable_rows:
+        return
+    labels = [
+        f"{row['title']} | {', '.join(row['tags'])}"
+        for row in readable_rows
+    ]
+    selector_col, button_col = st.columns([3, 1])
+    selected_label = selector_col.selectbox("Open writing source in reader", labels, key="inventory_reader_shortcut")
+    selected_row = readable_rows[labels.index(selected_label)]
+    if button_col.button("Open In Reader", width="stretch", key="inventory_reader_shortcut_button"):
+        st.session_state.source_reader_selected_key = selected_row["key"]
+        st.success("Reader selection updated.")
+
+
+def render_post_inventory(posts: pd.DataFrame) -> None:
+    st.markdown("#### Posts")
+    if posts.empty:
+        st.info("No post rows found.")
+        return
+    query = st.text_input(
+        "Search post text",
+        placeholder="filter by phrase, tag, or topic",
+        key="inventory_post_search",
+    )
+    filter_col, context_col = st.columns(2)
+    post_scope = filter_col.selectbox(
+        "Scope",
+        ["all", "posts", "replies"],
+        index=0,
+        key="inventory_post_scope",
+    )
+    show_reply_context = context_col.toggle(
+        "Show reply context",
+        value=True,
+        key="inventory_show_reply_context",
+        help="Shows the parent/root text captured for replies when available.",
+    )
+    explorer = posts.copy()
+    if query and "text" in explorer.columns:
+        explorer = explorer[explorer["text"].fillna("").astype(str).str.contains(query, case=False, na=False)]
+    if post_scope != "all" and "is_reply" in explorer.columns:
+        reply_mask = explorer["is_reply"].astype(str).str.lower().isin(["true", "1"])
+        explorer = explorer[reply_mask] if post_scope == "replies" else explorer[~reply_mask]
+    if "created_at_ts" in explorer.columns:
+        explorer = explorer.sort_values("created_at_ts", ascending=False, na_position="last")
+    base_columns = [
+        col
+        for col in ["created_at", "text", "is_reply", "has_reply_context", "like_count", "reply_count", "repost_count", "quote_count", "uri"]
+        if col in explorer.columns
+    ]
+    context_columns = [
+        col
+        for col in ["reply_context_text", "parent_author", "parent_text", "root_author", "root_text"]
+        if col in explorer.columns
+    ]
+    visible_columns = base_columns + (context_columns if show_reply_context else [])
+    st.caption(f"Showing {min(len(explorer), 100):,} of {len(explorer):,} matching rows.")
+    st.dataframe(explorer[visible_columns].head(100), width="stretch", hide_index=True)
+
+
+def render_writing_inventory(rentry_rows: list[dict[str, Any]], imported_rows: list[dict[str, Any]]) -> None:
+    st.markdown("#### Writing")
+    inventory_rows: list[dict[str, Any]] = []
+    readable_rows = sorted(
+        readable_source_rows(rentry_rows, imported_rows),
+        key=lambda row: (0 if row["editable"] else 1, str(row["title"]).lower()),
+    )
+    for row in readable_rows:
+        inventory_rows.append(
+            {
+                "title": row["title"],
+                "kind": row["kind"],
+                "tags": ", ".join(row["tags"]),
+                "word_count": row["word_count"],
+                "path": row["path"],
+            }
         )
-        input_path = st.text_input(
-            "Input file or folder",
-            placeholder=r"C:\Users\you\Takeout\Keep",
-            key="source_import_input_path",
+    if not inventory_rows:
+        st.info("No readable document sources found yet.")
+        return
+    option_labels = [
+        f"{row['title']} | {row['kind']} | {', '.join(row['tags'])}"
+        for row in readable_rows
+    ]
+    selected_label = st.selectbox("Open source", option_labels, key="inventory_reader_link_select")
+    selected_row = readable_rows[option_labels.index(selected_label)]
+    action_col, meta_col = st.columns([1, 3])
+    if action_col.button("Open In Reader", width="stretch", key="inventory_open_reader_button"):
+        st.session_state.source_reader_selected_key = selected_row["key"]
+        st.success("Reader selection updated below.")
+    meta_col.markdown(
+        f'<div class="reader-meta">{escape(selected_row["kind"])} | {int(selected_row["word_count"]):,} words | '
+        f'{escape(", ".join(selected_row["tags"]) or "untagged")}</div>',
+        unsafe_allow_html=True,
+    )
+    st.dataframe(pd.DataFrame(inventory_rows), width="stretch", hide_index=True)
+
+
+def render_source_reader(rentry_rows: list[dict[str, Any]], imported_rows: list[dict[str, Any]]) -> None:
+    rows = sorted(
+        readable_source_rows(rentry_rows, imported_rows),
+        key=lambda row: (0 if row["editable"] else 1, str(row["title"]).lower()),
+    )
+    if not rows:
+        st.info("No markdown or long-form sources are available to read.")
+        return
+
+    all_tags = sorted({tag for row in rows for tag in row["tags"]})
+    filters_left, filters_right = st.columns([2, 3])
+    query = filters_left.text_input("Find source", placeholder="title, tag, or path", key="source_reader_query")
+    selected_tags = filters_right.multiselect("Filter tags", all_tags, key="source_reader_tags")
+
+    filtered_rows = rows
+    if query.strip():
+        needle = query.strip().lower()
+        filtered_rows = [
+            row
+            for row in filtered_rows
+            if needle in row["title"].lower()
+            or needle in row["path"].lower()
+            or any(needle in tag.lower() for tag in row["tags"])
+        ]
+    if selected_tags:
+        selected_set = set(selected_tags)
+        filtered_rows = [row for row in filtered_rows if selected_set.intersection(row["tags"])]
+    if not filtered_rows:
+        st.info("No sources match the current filters.")
+        return
+
+    labels = [
+        f"{row['title']} | {row['kind']} | {', '.join(row['tags'])}"
+        for row in filtered_rows
+    ]
+    selected_key = str(st.session_state.get("source_reader_selected_key") or "")
+    selected_index = 0
+    if selected_key:
+        for index, row in enumerate(filtered_rows):
+            if row["key"] == selected_key:
+                selected_index = index
+                break
+    selected_label = st.selectbox("Source", labels, index=selected_index, key="source_reader_selected")
+    selected = filtered_rows[labels.index(selected_label)]
+    st.session_state.source_reader_selected_key = selected["key"]
+
+    st.markdown(f"#### {selected['title']}")
+    st.markdown(
+        f'<div class="reader-meta">{escape(selected["kind"])} | {int(selected["word_count"]):,} words | '
+        f'{escape(", ".join(selected["tags"]) or "untagged")} | {escape(selected["path"])}</div>',
+        unsafe_allow_html=True,
+    )
+
+    if selected["editable"]:
+        tag_text = st.text_input(
+            "Tags / labels",
+            value=", ".join(selected.get("labels") or []),
+            key=f"source_reader_tags_{selected['key']}",
+            help="Comma, semicolon, or newline separated. These are user-facing corpus tags; source type remains prompt routing.",
         )
-        source_type = st.selectbox(
-            "Source type",
-            ["auto", "google_keep", "poetry", "notes", "longform"],
-            help="Google Keep preserves color and labels. Poetry uses a poetry-specific training prompt.",
-            key="source_import_type",
-        )
-        label = st.text_input("Optional label", placeholder="journal, red notes, poems", key="source_import_label")
-        mode = "append" if st.toggle("Append to existing imports", value=True, key="source_import_append") else "replace"
-        preview_col, import_col = st.columns(2)
-        if preview_col.button("Preview Import", width="stretch", key="source_preview_button"):
-            if not input_path.strip():
-                st.error("Choose an input file or folder first.")
-            elif not SOURCE_IMPORTER_PATH.exists():
-                st.error(f"Importer not found: {SOURCE_IMPORTER_PATH}")
+        if st.button("Save Tags", width="stretch", key=f"source_reader_save_tags_{selected['key']}"):
+            labels_to_save = normalize_tag_list(tag_text)
+            if write_imported_source_labels(selected["key"], labels_to_save):
+                st.cache_data.clear()
+                st.success("Tags saved.")
+                st.rerun()
             else:
-                with st.spinner("Previewing local sources..."):
-                    try:
-                        returncode, output = run_source_preview(input_path, source_type, mode, label)
-                    except subprocess.TimeoutExpired:
-                        st.error("Preview timed out after 120 seconds.")
-                        return
-                if returncode == 0:
-                    st.success("Preview complete. Nothing was written.")
-                    if output:
-                        st.code(output[-4000:], language="text")
-                else:
-                    st.error(f"Preview failed with exit code {returncode}.")
-                    if output:
-                        st.code(output[-2400:], language="text")
-        if import_col.button("Import Local Sources", width="stretch", key="source_import_button"):
-            if not input_path.strip():
-                st.error("Choose an input file or folder first.")
-            elif not SOURCE_IMPORTER_PATH.exists():
-                st.error(f"Importer not found: {SOURCE_IMPORTER_PATH}")
+                st.error("Could not save tags for this source.")
+
+    rendered_tab, raw_tab = st.tabs(["Rendered Markdown", "Raw Text"])
+    with rendered_tab:
+        st.markdown(selected["text"])
+    with raw_tab:
+        st.code(selected["text"], language="markdown")
+
+
+def render_source_import_controls() -> None:
+    st.caption("Imports are written into the ignored dataset folder so private notes stay local by default.")
+    configured_exports = configured_source_exports()
+    default_export = configured_exports[0] if configured_exports else {}
+    input_path = st.text_input(
+        "Input file or folder",
+        value=str(default_export.get("path") or ""),
+        placeholder=r"C:\Users\you\Takeout\Keep",
+        key="source_import_input_path",
+    )
+    recursive = st.toggle(
+        "Include subfolders",
+        value=bool(default_export.get("recursive", True)),
+        key="source_import_recursive",
+    )
+    exclude_names_text = st.text_area(
+        "Exclude file/folder names",
+        value=str(default_export.get("exclude_names") or ""),
+        key="source_import_exclude_names",
+        height=82,
+    )
+    source_type_options = ["auto", "google_keep", "poetry", "notes", "longform"]
+    default_source_type = str(default_export.get("source_type") or "auto")
+    source_type_index = source_type_options.index(default_source_type) if default_source_type in source_type_options else 0
+    source_type = st.selectbox(
+        "Prompt routing",
+        source_type_options,
+        index=source_type_index,
+        help="Prompt routing is internal. Use tags/labels below for user-facing corpus organization.",
+        key="source_import_type",
+    )
+    label = st.text_input("Tags / labels", placeholder="drive-writing, longform, draft", key="source_import_label")
+    mode = "append" if st.toggle("Append to existing imports", value=True, key="source_import_append") else "replace"
+    exclude_names = split_exclude_names(exclude_names_text)
+    preview_col, import_col = st.columns(2)
+    if preview_col.button("Preview Import", width="stretch", key="source_preview_button"):
+        if not input_path.strip():
+            st.error("Choose an input file or folder first.")
+        elif not SOURCE_IMPORTER_PATH.exists():
+            st.error(f"Importer not found: {SOURCE_IMPORTER_PATH}")
+        else:
+            with st.spinner("Previewing local sources..."):
+                try:
+                    returncode, output = run_source_preview(
+                        input_path,
+                        source_type,
+                        mode,
+                        label,
+                        recursive,
+                        exclude_names,
+                    )
+                except subprocess.TimeoutExpired:
+                    st.error("Preview timed out after 120 seconds.")
+                    return
+            if returncode == 0:
+                st.success("Preview complete. Nothing was written.")
+                if output:
+                    st.code(output[-4000:], language="text")
             else:
-                with st.spinner("Importing local sources..."):
-                    try:
-                        returncode, output = run_source_import(input_path, source_type, mode, label)
-                    except subprocess.TimeoutExpired:
-                        st.error("Import timed out after 120 seconds.")
-                        return
-                if returncode == 0:
-                    st.cache_data.clear()
-                    st.success("Sources imported.")
-                    if output:
-                        st.code(output[-2200:], language="text")
-                    st.rerun()
-                else:
-                    st.error(f"Import failed with exit code {returncode}.")
-                    if output:
-                        st.code(output[-2400:], language="text")
+                st.error(f"Preview failed with exit code {returncode}.")
+                if output:
+                    st.code(output[-2400:], language="text")
+    if import_col.button("Import Local Sources", width="stretch", key="source_import_button"):
+        if not input_path.strip():
+            st.error("Choose an input file or folder first.")
+        elif not SOURCE_IMPORTER_PATH.exists():
+            st.error(f"Importer not found: {SOURCE_IMPORTER_PATH}")
+        else:
+            with st.spinner("Importing local sources..."):
+                try:
+                    returncode, output = run_source_import(
+                        input_path,
+                        source_type,
+                        mode,
+                        label,
+                        recursive,
+                        exclude_names,
+                    )
+                except subprocess.TimeoutExpired:
+                    st.error("Import timed out after 120 seconds.")
+                    return
+            if returncode == 0:
+                st.cache_data.clear()
+                st.success("Sources imported.")
+                if output:
+                    st.code(output[-2200:], language="text")
+                st.rerun()
+            else:
+                st.error(f"Import failed with exit code {returncode}.")
+                if output:
+                    st.code(output[-2400:], language="text")
 
 
 def render_training_overview() -> None:
@@ -1045,19 +1548,26 @@ def render_training_overview() -> None:
     stop_signal_path = default_stop_signal_path(WORKSPACE_ROOT)
     api_runs = load_recent_api_runs(8)
 
-    left, middle, right = st.columns(3)
+    st.markdown("### Runs")
     if payload:
         status = payload_status(payload)
         update_label = last_update_label(payload)
         checkpoint = extract_resume_checkpoint(payload) or "-"
-        left.metric("Local run status", status.upper())
-        middle.metric("Last update", update_label)
-        right.metric("Resume checkpoint", Path(checkpoint).name if checkpoint != "-" else "-")
-        render_status_card("Last local run", run_display_name(payload), describe_payload_status(payload))
+        status_detail = "complete" if status == "ok" else describe_payload_status(payload)
+        render_metric_grid(
+            [
+                {"label": "Current state", "value": status.upper(), "detail": status_detail},
+                {"label": "Run label", "value": run_display_name(payload), "detail": str(payload.get("run_name") or "-")},
+                {"label": "Last update", "value": update_label, "detail": "local heartbeat / completion"},
+                {"label": "Checkpoint", "value": "found" if checkpoint != "-" else "missing", "detail": Path(checkpoint).name if checkpoint != "-" else "-"},
+            ]
+        )
         with st.expander("Run identifiers and resume detail"):
             st.dataframe(
                 pd.DataFrame(
                     [
+                        {"field": "Display label", "value": run_display_name(payload)},
+                        {"field": "State", "value": status.upper()},
                         {"field": "Run name", "value": str(payload.get("run_name") or "-")},
                         {"field": "Dataset variant", "value": str(payload.get("dataset_variant") or "-")},
                         {"field": "Training run ID", "value": str(payload.get("training_run_id") or "-")},
@@ -1070,10 +1580,14 @@ def render_training_overview() -> None:
                 hide_index=True,
             )
     else:
-        left.metric("Local run status", "NONE")
-        middle.metric("Last update", "-")
-        right.metric("Resume checkpoint", "-")
-        render_status_card("Last local run", "No latest_active_run.json found", "Start a run to populate local telemetry.")
+        render_metric_grid(
+            [
+                {"label": "Current state", "value": "NONE", "detail": "no local run record"},
+                {"label": "Run label", "value": "-", "detail": "start a run to populate telemetry"},
+                {"label": "Last update", "value": "-", "detail": ""},
+                {"label": "Checkpoint", "value": "-", "detail": ""},
+            ]
+        )
 
     st.markdown("#### Stop Control")
     stop_detail = format_stop_request(str(stop_signal_path))
@@ -1087,7 +1601,22 @@ def render_training_overview() -> None:
     if api_runs.empty:
         st.info("No Tinker API run data available. Set TINKER_API_KEY before launching Streamlit to enable this panel.")
     else:
-        st.dataframe(api_runs, width="stretch", hide_index=True)
+        decorated_runs = decorate_api_runs(api_runs)
+        preferred_columns = [
+            column
+            for column in [
+                "run_label",
+                "state",
+                "training_run_id",
+                "base_model",
+                "lora_rank",
+                "last_request_time_utc",
+                "seconds_since_last_request",
+                "corrupted",
+            ]
+            if column in decorated_runs.columns
+        ]
+        st.dataframe(decorated_runs[preferred_columns], width="stretch", hide_index=True)
 
 
 def render_endpoint_chat() -> None:
@@ -1383,11 +1912,11 @@ def render_diagnostics(manifest: dict[str, Any]) -> None:
 
 
 def render_refresh_controls(manifest: dict[str, Any]) -> None:
-    st.sidebar.header("Controls")
+    st.sidebar.header("Post Source")
     handle = st.sidebar.text_input("Bluesky handle", value=default_bluesky_handle(manifest), key="sidebar_bluesky_handle")
     st.sidebar.caption(f"Current snapshot: {manifest.get('collected_at_utc', 'unknown')}")
 
-    if st.sidebar.button("Pull latest Bluesky posts", type="primary", width="stretch", key="sidebar_pull_posts_button"):
+    if st.sidebar.button("Refresh Bluesky Snapshot", type="primary", width="stretch", key="sidebar_pull_posts_button"):
         if not DATASET_BUILDER_PATH.exists():
             st.sidebar.error(f"Dataset builder not found: {DATASET_BUILDER_PATH}")
             return
@@ -1422,13 +1951,12 @@ def main() -> None:
     render_refresh_controls(manifest)
     render_header(manifest)
 
-    dataset_tab, sources_tab, evaluation_tab, training_tab, chat_tab, diagnostics_tab, files_tab = st.tabs(
-        ["Dataset", "Sources", "Evaluation", "Training", "Chat / Endpoint", "Diagnostics", "Files"]
+    corpus_tab, evaluation_tab, training_tab, chat_tab, diagnostics_tab, files_tab = st.tabs(
+        ["Corpus", "Evaluation", "Training", "Chat / Endpoint", "Diagnostics", "Files"]
     )
-    with dataset_tab:
-        render_dataset_overview(posts, manifest, rentry_rows)
-    with sources_tab:
-        render_sources_overview(rentry_rows, imported_rows)
+    with corpus_tab:
+        render_dataset_overview(posts, manifest, rentry_rows, imported_rows)
+        render_sources_overview(posts, rentry_rows, imported_rows)
     with evaluation_tab:
         render_evaluation()
     with training_tab:

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import csv
+import fnmatch
 import hashlib
 import json
 import re
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -31,10 +33,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preview", action="store_true", help="Preview rows and counts without writing imported_sources.jsonl.")
     parser.add_argument("--append", action=argparse.BooleanOptionalAction, default=True, help="Append to existing imports.")
     parser.add_argument("--replace", dest="append", action="store_false", help="Replace existing imported rows.")
+    parser.add_argument("--recursive", action=argparse.BooleanOptionalAction, default=True, help="Recurse into subfolders when the input is a folder.")
+    parser.add_argument("--exclude-name", action="append", default=[], help="File or folder name/glob to skip. May be repeated.")
     return parser.parse_args()
 
 
 def main() -> int:
+    configure_stdio()
     args = parse_args()
     dataset_root = Path(args.dataset_root).resolve()
     output_path = dataset_root / IMPORTED_SOURCES_PATH
@@ -42,7 +47,15 @@ def main() -> int:
     if not input_path.exists():
         raise FileNotFoundError(f"Input path does not exist: {input_path}")
 
-    rows = list(import_sources(input_path, source_type=args.source_type, label=args.label))
+    rows = list(
+        import_sources(
+            input_path,
+            source_type=args.source_type,
+            label=args.label,
+            recursive=args.recursive,
+            exclude_names=args.exclude_name,
+        )
+    )
     if not rows:
         raise RuntimeError(f"No importable text rows found under {input_path}")
 
@@ -76,8 +89,26 @@ def main() -> int:
     return 0
 
 
-def import_sources(input_path: Path, *, source_type: str, label: str) -> Iterable[dict[str, Any]]:
-    paths = discover_input_paths(input_path)
+def configure_stdio() -> None:
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+def import_sources(
+    input_path: Path,
+    *,
+    source_type: str,
+    label: str,
+    recursive: bool = True,
+    exclude_names: list[str] | None = None,
+) -> Iterable[dict[str, Any]]:
+    paths = discover_input_paths(input_path, recursive=recursive, exclude_names=exclude_names or [])
     imported_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     for path in paths:
         for row in rows_from_path(path, source_type=source_type, label=label, imported_at=imported_at):
@@ -90,11 +121,36 @@ def import_sources(input_path: Path, *, source_type: str, label: str) -> Iterabl
             yield row
 
 
-def discover_input_paths(input_path: Path) -> list[Path]:
+def discover_input_paths(input_path: Path, *, recursive: bool = True, exclude_names: list[str] | None = None) -> list[Path]:
+    exclude_names = exclude_names or []
     if input_path.is_file():
-        return [input_path]
+        return [] if is_excluded_path(input_path, exclude_names) else [input_path]
     supported = TEXT_EXTENSIONS | JSON_EXTENSIONS | JSONL_EXTENSIONS | CSV_EXTENSIONS
-    return sorted(path for path in input_path.rglob("*") if path.is_file() and path.suffix.lower() in supported)
+    candidates = input_path.rglob("*") if recursive else input_path.glob("*")
+    return sorted(
+        path
+        for path in candidates
+        if path.is_file()
+        and path.suffix.lower() in supported
+        and not is_excluded_path(path, exclude_names)
+    )
+
+
+def is_excluded_path(path: Path, exclude_names: list[str]) -> bool:
+    if not exclude_names:
+        return False
+    parts = [*path.parts, path.name]
+    normalized = str(path).replace("\\", "/")
+    for pattern in exclude_names:
+        pattern = pattern.strip()
+        if not pattern:
+            continue
+        normalized_pattern = pattern.replace("\\", "/")
+        if fnmatch.fnmatch(path.name, pattern) or fnmatch.fnmatch(normalized, normalized_pattern):
+            return True
+        if any(part == pattern for part in parts):
+            return True
+    return False
 
 
 def rows_from_path(path: Path, *, source_type: str, label: str, imported_at: str) -> Iterable[dict[str, Any]]:
@@ -129,7 +185,7 @@ def rows_from_path(path: Path, *, source_type: str, label: str, imported_at: str
                 )
         return
     if suffix in TEXT_EXTENSIONS:
-        text = path.read_text(encoding="utf-8", errors="replace").strip()
+        text = clean_text(path.read_text(encoding="utf-8-sig", errors="replace"))
         yield build_row(
             source_type=resolve_source_type(source_type, path, {"text": text}),
             title=path.stem,
@@ -229,13 +285,13 @@ def normalize_google_keep_row(row: dict[str, Any], *, path: Path, label: str, im
             text_parts.append("\n".join(list_items))
     labels = normalize_labels(row.get("labels"))
     if label:
-        labels.append(label)
+        labels.extend(normalize_labels(label))
     return build_row(
         source_type="google_keep",
         title=title,
         text="\n\n".join(text_parts).strip(),
         path=path,
-        label=label,
+        label="",
         imported_at=imported_at,
         color=str(row.get("color") or ""),
         labels=unique(labels),
@@ -262,7 +318,7 @@ def build_row(
     updated_at: str = "",
     metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    row_labels = unique([*(labels or []), *([label] if label else [])])
+    row_labels = unique([source_type, *(labels or []), *normalize_labels(label)])
     return {
         "source_type": source_type,
         "title": title,
@@ -281,8 +337,12 @@ def first_text(row: dict[str, Any], *keys: str) -> str:
     for key in keys:
         value = row.get(key)
         if value is not None and str(value).strip():
-            return str(value).strip()
+            return clean_text(str(value))
     return ""
+
+
+def clean_text(value: str) -> str:
+    return value.replace("\ufeff", "").replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 def normalize_labels(value: Any) -> list[str]:

@@ -1,5 +1,5 @@
-tinker==0.16.1
-tinker-cookbook==0.2.2
+tinker==0.22.3
+tinker-cookbook==0.4.2
 numpy>=2.0
 pandas>=2.2
 matplotlib>=3.9
