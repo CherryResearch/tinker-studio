@@ -39,6 +39,23 @@ Common execution patterns:
 .\tinker_env\Scripts\python.exe .\run_tinker_experiment.py --workspace . --run-name essay_recent_r16 --resume-from-checkpoint "<checkpoint-path>"
 ```
 
+Preview the exact train/validation/test examples before creating a Tinker client:
+
+```powershell
+.\tinker_env\Scripts\python.exe .\run_tinker_experiment.py --workspace . --run-name conversational_120b_r8_lr3e5_b6 --export-training-preview --preview-limit 25
+```
+
+Tag-filtered runs:
+
+```powershell
+.\tinker_env\Scripts\python.exe .\run_tinker_experiment.py --workspace . --run-name conversational_120b_r8_lr3e5_b6 --smoke-test --include-tag synthetic
+.\tinker_env\Scripts\python.exe .\run_tinker_experiment.py --workspace . --run-name conversational_120b_r8_lr3e5_b6 --exclude-tag synthetic
+```
+
+`--include-tag` keeps training examples that match at least one selected tag. `--exclude-tag`
+drops any training example matching excluded tags. Both flags may be repeated or comma-separated;
+validation/test splits stay unchanged for comparison.
+
 After starting or resuming a run, verify state:
 
 ```powershell
@@ -52,14 +69,16 @@ behavior with `pause` on exit.
 ## Workflow
 
 1. Run `--list-runs` or `--describe-latest` when the current state is unclear.
-2. Use `--smoke-test` first after code, dataset, or config changes.
-3. Prefer `--resume` or `--auto-resume` when `run_outputs\latest_active_run.json` already points at an interrupted run.
-4. Use `--resume-from-checkpoint` only when you have an explicit checkpoint path and need to bypass the default local record.
-5. Use the Streamlit dashboard for browser-visible confirmation after the CLI command starts, not as a substitute for captured command output.
+2. Use `--export-training-preview` first after dataset-format or tag-filter changes when the exact rendered examples matter.
+3. Use `--smoke-test` first after code, dataset, or config changes.
+4. Prefer `--resume` or `--auto-resume` when `run_outputs\latest_active_run.json` already points at an interrupted run.
+5. Use `--resume-from-checkpoint` only when you have an explicit checkpoint path and need to bypass the default local record.
+6. Use the Streamlit dashboard for browser-visible confirmation after the CLI command starts, not as a substitute for captured command output.
 
 ## Guardrails
 
 - Do not start a duplicate full run if the monitor scripts still show an active heartbeat for the same run.
 - `run_tinker_experiment.py` clears an existing stop request by default when starting a new run. Mention that when explaining why a pending stop file disappeared.
 - Prefer the predefined run specs from `get_experiment_specs()` over ad hoc hyperparameter guessing unless the user asked for code changes.
+- For small stylized conversational corpora on `gpt-oss-120b`, prefer `conversational_120b_r8_lr3e5_b6` first, then `conversational_120b_r16_lr4e5_b6` if rank 8 underfits. Keep rank 32 for comparison when stronger adapter imprinting is intentional.
 - If the dataset was just refreshed from Bluesky, run `--smoke-test` before a full run.
