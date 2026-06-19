@@ -7,6 +7,7 @@ import random
 import re
 import statistics
 import textwrap
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -20,6 +21,16 @@ from tinker_cookbook.supervised.data import conversation_to_datum
 MANIFEST_FILENAME = "dataset_manifest.json"
 DATASET_ROOT_ENV_VARS = ("TINKER_STUDIO_DATASET_ROOT", "TINKER_DATASET_ROOT")
 DEFAULT_DATASET_ROOT = Path("data") / "training_data"
+CONVERSATIONAL_SYSTEM_PROMPT = (
+    "You are a conversational friend speaking in the trained voice. Reply naturally to the person in front of you. "
+    "Do not treat their message as an opening to complete unless they explicitly ask for continuation. "
+    "Do not mirror or repeat the user's wording back at them. Keep it specific, grounded, and human-scale. "
+    "Use direct casual language, ask a short follow-up only when it genuinely helps, and avoid generic assistant or customer-support framing."
+)
+COMPLETION_SYSTEM_PROMPT = (
+    "You complete text in the trained voice. Keep the user's opening exactly as given, match the source format, "
+    "and return only the finished text."
+)
 
 
 @dataclass(frozen=True)
@@ -141,6 +152,7 @@ def build_post_examples(
         )
         prompt = _build_user_prompt(opening_text=opening_text, row=row)
         example_id = str(row.get("id") or row.get("post_id") or f"row-{index}")
+        source_kind = "reply" if row.get("is_reply") else "post"
         examples.append(
             ConversationExample(
                 example_id=example_id,
@@ -153,12 +165,23 @@ def build_post_examples(
                 metadata={
                     "created_at": row.get("created_at"),
                     "is_reply": bool(row.get("is_reply")),
+                    "source_kind": source_kind,
+                    "tags": ["bluesky", source_kind],
                     "hashtags": list(row.get("hashtags") or []),
                     "reply_context_text": row.get("reply_context_text") or row.get("parent_text") or "",
+                    "training_format": "completion",
+                    "transform": f"{source_kind}_opening_completion",
+                    "raw_source_kind": "bluesky",
+                    "raw_source_id": example_id,
+                    "raw_text_sha256": text_sha256(target_text),
                 },
             )
         )
     return examples
+
+
+def text_sha256(value: str) -> str:
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
 
 def _pick_opening(

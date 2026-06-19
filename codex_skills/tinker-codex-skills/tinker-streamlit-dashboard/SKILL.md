@@ -24,6 +24,30 @@ Prefer the launcher for user-facing sessions:
 .\launch_streamlit_dashboard.bat
 ```
 
+The standalone endpoint bridge is an OpenAI-compatible API server plus a small
+browser chat page. Open the chat UI at:
+
+```text
+http://127.0.0.1:8765/chat
+```
+
+Use `http://127.0.0.1:8765/v1` as the OpenAI-compatible base URL for clients.
+Browser visits to `/v1` render the same local chat page for convenience.
+The chat page keeps lightweight local testing history in
+`run_outputs\endpoint_chat_history\*.json`, preserves the current session across
+reloads, sends on Enter while Shift+Enter inserts a newline, and defaults to
+192 max output tokens and temperature `0.4`. It defaults to `chat` mode, which sends structured
+system/user/assistant messages with a short conversational-friend system prompt. The bridge strips
+Harmony/channel control-token leaks from generated text and drops malformed/repetitive assistant
+turns from future prompt history before saving.
+The chat page also exposes a run selector backed by `/v1/runs`, showing the last 10 sampler-backed
+run records from `run_outputs` with completion/start time, base model, dataset variant, status, and
+learning rate metadata. Selecting a run calls `/v1/runs/select` and switches the active sampler.
+Use `completion` mode only when intentionally testing the older post/opening
+completion behavior or held-out opening evaluations. This is a small local
+bridge; future Float integration should treat Float conversations as the durable
+backing store rather than expanding this endpoint into a full chat product.
+
 For captured terminal output, run Streamlit directly:
 
 ```powershell
@@ -46,10 +70,10 @@ Invoke-WebRequest -UseBasicParsing -Uri http://localhost:8501/_stcore/health
 ## Dashboard Data Sources
 
 - Dataset tab: `data\training_data\processed\posts.csv`, reply-context columns, and `tinker\dataset_manifest.json`.
-- Sources tab: long-form seed docs in `processed\rentry_pages.jsonl`, imported sources in `processed\imported_sources.jsonl`, and interview rows in `processed\interview_qa.jsonl` when present.
+- Sources tab: long-form seed docs in `processed\rentry_pages.jsonl`, imported sources in `processed\imported_sources.jsonl`, synthetic rows in `processed\synthetic_sources.jsonl`, and interview rows in `processed\interview_qa.jsonl` when present.
 - Evaluation tab: held-out openings and targets loaded on demand from the dataset helper stack.
-- Training tab: `run_outputs\latest_active_run.json`, `.tinker_stop_request.json`, and optional Tinker API recent runs.
-- Chat / Endpoint tab: sampler checkpoints discovered from `run_outputs\*.json` and exposed through the local OpenAI-compatible bridge.
+- Training tab: `run_outputs\latest_active_run.json`, `.tinker_stop_request.json`, optional Tinker API recent runs, tag-filter previews for `--include-tag` / `--exclude-tag` training commands, and a training-example inspector that shows exact messages, target text, source metadata, tags, and optional JSONL preview export under `run_outputs\dataset_previews`.
+- Chat / Endpoint tab: sampler checkpoints discovered from `run_outputs\*.json` and exposed through the local OpenAI-compatible bridge; the standalone chat page can switch between recent sampler runs without restarting the server.
 - Sidebar refresh: calls `data\training_data\build_bluesky_finetune_dataset.py --handle <handle> --outdir <dataset-root>`.
 
 If the user reports stale dataset counts, validate the manifest and CSV directly:
@@ -67,6 +91,7 @@ print(manifest["collected_at_utc"])
 print(manifest["counts"])
 print(len(posts))
 print(posts["created_at"].max())
+print((root / "processed" / "synthetic_sources.jsonl").exists())
 '@ | .\tinker_env\Scripts\python.exe -
 ```
 

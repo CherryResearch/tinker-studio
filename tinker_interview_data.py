@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
-from tinker_training_utils import ConversationExample, slugify_name
+from tinker_training_utils import ConversationExample, slugify_name, text_sha256
 
 
 INTERVIEW_RAW_PATH = Path("raw") / "interview_qa_raw.jsonl"
@@ -301,6 +301,8 @@ def build_interview_examples(
             continue
 
         interview_id = str(row.get("interview_id") or f"interview-{index:03d}")
+        source_session_id = str(row.get("source_session_id") or "").strip()
+        raw_source_id = source_session_id or interview_id
         qa_examples.append(
             ConversationExample(
                 example_id=f"{interview_id}-qa",
@@ -317,7 +319,12 @@ def build_interview_examples(
                     "source_kind": "interview_qa",
                     "theme": row.get("theme"),
                     "tags": list(row.get("tags") or []),
-                    "source_session_id": row.get("source_session_id"),
+                    "source_session_id": source_session_id,
+                    "training_format": "completion",
+                    "transform": "interview_qa_answer",
+                    "raw_source_kind": "interview",
+                    "raw_source_id": raw_source_id,
+                    "raw_text_sha256": text_sha256(training_answer),
                 },
             )
         )
@@ -345,7 +352,12 @@ def build_interview_examples(
                         "source_kind": "interview_post",
                         "theme": row.get("theme"),
                         "tags": list(row.get("tags") or []),
-                        "source_session_id": row.get("source_session_id"),
+                        "source_session_id": source_session_id,
+                        "training_format": "completion",
+                        "transform": "interview_post_completion",
+                        "raw_source_kind": "interview",
+                        "raw_source_id": raw_source_id,
+                        "raw_text_sha256": text_sha256(str(target)),
                     },
                 )
             )

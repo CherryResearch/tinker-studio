@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -8,7 +9,7 @@ import sys
 from html import escape
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 from urllib import error, request
 
 import pandas as pd
@@ -54,11 +55,26 @@ MANIFEST_PATH = DATASET_ROOT / "tinker" / "dataset_manifest.json"
 DATASET_BUILDER_PATH = DATASET_ROOT / "build_bluesky_finetune_dataset.py"
 RENTRY_PAGES_PATH = DATASET_ROOT / "processed" / "rentry_pages.jsonl"
 IMPORTED_SOURCES_PATH = DATASET_ROOT / "processed" / "imported_sources.jsonl"
+SYNTHETIC_SOURCES_PATH = DATASET_ROOT / "processed" / "synthetic_sources.jsonl"
 SOURCE_IMPORTER_PATH = WORKSPACE_ROOT / "tinker_source_imports.py"
 ENDPOINT_BASE_URL = "http://localhost:8765/v1"
 ENDPOINT_PORT = 8765
+DEFAULT_ENDPOINT_MAX_TOKENS = 192
+DEFAULT_ENDPOINT_TEMPERATURE = 0.4
+DEFAULT_ENDPOINT_MODE = "chat"
 IMPORTABLE_SOURCE_EXTENSIONS = {".txt", ".md", ".markdown", ".json", ".jsonl", ".ndjson", ".csv", ".tsv"}
-SOURCE_EXPORTS_ENV = "TINKER_STUDIO_SOURCE_EXPORTS_JSON"
+DEFAULT_SOURCE_IMPORT_ROOT = Path(
+    os.environ.get("TINKER_SOURCE_IMPORT_ROOT", str(Path.home() / "Documents" / "tinker-sources"))
+)
+KNOWN_SOURCE_EXPORTS = [
+    {
+        "name": "Local source exports",
+        "path": DEFAULT_SOURCE_IMPORT_ROOT,
+        "source_type": "longform",
+        "recursive": False,
+        "exclude_names": "",
+    },
+]
 
 
 st.set_page_config(
@@ -422,38 +438,9 @@ def inspect_source_export(path_string: str, recursive: bool) -> dict[str, Any]:
     }
 
 
-def configured_source_exports() -> list[dict[str, Any]]:
-    raw_value = os.environ.get(SOURCE_EXPORTS_ENV, "").strip()
-    if not raw_value:
-        return []
-    try:
-        parsed = json.loads(raw_value)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(parsed, list):
-        return []
-    exports: list[dict[str, Any]] = []
-    for index, item in enumerate(parsed, start=1):
-        if not isinstance(item, dict):
-            continue
-        path_value = str(item.get("path") or "").strip()
-        if not path_value:
-            continue
-        exports.append(
-            {
-                "name": str(item.get("name") or f"Source export {index}"),
-                "path": Path(path_value).expanduser(),
-                "source_type": str(item.get("source_type") or "auto"),
-                "recursive": bool(item.get("recursive", True)),
-                "exclude_names": str(item.get("exclude_names") or ""),
-            }
-        )
-    return exports
-
-
 def known_source_export_rows() -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for source in configured_source_exports():
+    for source in KNOWN_SOURCE_EXPORTS:
         path = source["path"]
         recursive = bool(source["recursive"])
         summary = inspect_source_export(str(path), recursive)
@@ -559,6 +546,115 @@ def load_evaluation_rows(variant_name: str, split_name: str, limit: int) -> list
             }
         )
     return rows
+
+
+@st.cache_data(ttl=60)
+def load_training_filter_preview(
+    include_tags: tuple[str, ...],
+    exclude_tags: tuple[str, ...],
+) -> dict[str, Any]:
+    from run_tinker_experiment import get_experiment_specs
+    from tinker_experiment_manager import (
+        build_dataset_variant_summary_df,
+        build_experiment_dataset_variants,
+        build_experiment_plan_df,
+        collect_example_tag_counts,
+    )
+    from tinker_training_utils import find_dataset_root, load_dataset_bundle
+
+    dataset_root = find_dataset_root(WORKSPACE_ROOT)
+    bundle = load_dataset_bundle(dataset_root)
+    unfiltered_variants = build_experiment_dataset_variants(bundle)
+    tag_counts: dict[str, int] = {}
+    for variant in unfiltered_variants.values():
+        for tag, count in collect_example_tag_counts(variant.train_examples).items():
+            tag_counts[tag] = tag_counts.get(tag, 0) + count
+
+    filtered_variants = build_experiment_dataset_variants(
+        bundle,
+        include_tags=list(include_tags),
+        exclude_tags=list(exclude_tags),
+    )
+    specs = get_experiment_specs(smoke_test=False)
+    smoke_specs = get_experiment_specs(smoke_test=True)
+    return {
+        "available_tags": sorted(tag_counts),
+        "tag_counts": dict(sorted(tag_counts.items())),
+        "variant_names": sorted(filtered_variants),
+        "variant_summary": build_dataset_variant_summary_df(filtered_variants),
+        "plan": build_experiment_plan_df(specs, filtered_variants, default_config={}),
+        "smoke_plan": build_experiment_plan_df(smoke_specs, filtered_variants, default_config={}),
+    }
+
+
+@st.cache_data(ttl=60)
+def load_training_example_preview(
+    variant_name: str,
+    split_name: str,
+    include_tags: tuple[str, ...],
+    exclude_tags: tuple[str, ...],
+    limit: int,
+) -> list[dict[str, Any]]:
+    from tinker_experiment_manager import build_experiment_dataset_variants, build_training_example_preview_rows
+    from tinker_training_utils import find_dataset_root, load_dataset_bundle
+
+    dataset_root = find_dataset_root(WORKSPACE_ROOT)
+    bundle = load_dataset_bundle(dataset_root)
+    variants = build_experiment_dataset_variants(
+        bundle,
+        include_tags=list(include_tags),
+        exclude_tags=list(exclude_tags),
+    )
+    if variant_name not in variants:
+        return []
+    return build_training_example_preview_rows(
+        variants[variant_name],
+        dataset_variant_name=variant_name,
+        split_name=split_name,
+        limit=max(1, int(limit)),
+    )
+
+
+def write_training_preview_file(
+    variant_name: str,
+    include_tags: Sequence[str],
+    exclude_tags: Sequence[str],
+    limit_per_split: int,
+) -> Path:
+    from tinker_experiment_manager import build_experiment_dataset_variants, write_training_example_preview_jsonl
+    from tinker_training_utils import find_dataset_root, load_dataset_bundle
+
+    dataset_root = find_dataset_root(WORKSPACE_ROOT)
+    bundle = load_dataset_bundle(dataset_root)
+    variants = build_experiment_dataset_variants(
+        bundle,
+        include_tags=list(include_tags),
+        exclude_tags=list(exclude_tags),
+    )
+    selected = {variant_name: variants[variant_name]}
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    output_path = WORKSPACE_ROOT / "run_outputs" / "dataset_previews" / f"{timestamp}-{variant_name}.jsonl"
+    write_training_example_preview_jsonl(
+        output_path,
+        selected,
+        split_names=("train", "validation", "test"),
+        limit_per_split=max(1, int(limit_per_split)),
+    )
+    return output_path
+
+
+def format_tag_cli_args(*, include_tags: Sequence[str], exclude_tags: Sequence[str]) -> str:
+    args: list[str] = []
+    for tag in include_tags:
+        args.extend(["--include-tag", quote_powershell_arg(tag)])
+    for tag in exclude_tags:
+        args.extend(["--exclude-tag", quote_powershell_arg(tag)])
+    return " ".join(args)
+
+
+def quote_powershell_arg(value: str) -> str:
+    escaped = str(value).replace('"', '`"')
+    return f'"{escaped}"'
 
 
 @st.cache_data(ttl=20)
@@ -784,7 +880,8 @@ def normalize_tag_list(value: Any) -> list[str]:
     if value is None:
         return []
     if isinstance(value, str):
-        raw_values = re.split(r"[,;\n]", value)
+        parsed_values = parse_tag_collection_string(value)
+        raw_values = parsed_values if parsed_values is not None else re.split(r"[,;\n]", value)
     elif isinstance(value, list):
         raw_values = []
         for item in value:
@@ -797,13 +894,35 @@ def normalize_tag_list(value: Any) -> list[str]:
     tags: list[str] = []
     seen: set[str] = set()
     for raw in raw_values:
-        tag = raw.strip()
+        tag = clean_tag_text(raw)
         if not tag:
             continue
         if tag not in seen:
             tags.append(tag)
             seen.add(tag)
     return tags
+
+
+def parse_tag_collection_string(value: str) -> list[Any] | None:
+    stripped = value.strip()
+    if not stripped:
+        return []
+    if not ((stripped.startswith("[") and stripped.endswith("]")) or (stripped.startswith("(") and stripped.endswith(")"))):
+        return None
+    try:
+        parsed = ast.literal_eval(stripped)
+    except (SyntaxError, ValueError):
+        return None
+    if isinstance(parsed, (list, tuple)):
+        return list(parsed)
+    return None
+
+
+def clean_tag_text(value: Any) -> str:
+    tag = str(value).strip().strip("'\"").strip()
+    if tag in {"[", "]", "[]", "(", ")", "()"}:
+        return ""
+    return tag.strip("[]()").strip().strip("'\"").strip()
 
 
 def row_tags(row: dict[str, Any], *, defaults: list[str] | None = None) -> list[str]:
@@ -820,6 +939,7 @@ def source_tag_counts(
     posts: pd.DataFrame,
     rentry_rows: list[dict[str, Any]],
     imported_rows: list[dict[str, Any]],
+    synthetic_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, int]:
     counts: dict[str, int] = {}
 
@@ -844,10 +964,17 @@ def source_tag_counts(
     for row in imported_rows:
         for tag in row_tags(row):
             add(tag)
+    for row in synthetic_rows or []:
+        for tag in row_tags(row, defaults=["synthetic"]):
+            add(tag)
     return dict(sorted(counts.items()))
 
 
-def readable_source_rows(rentry_rows: list[dict[str, Any]], imported_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def readable_source_rows(
+    rentry_rows: list[dict[str, Any]],
+    imported_rows: list[dict[str, Any]],
+    synthetic_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for index, row in enumerate(rentry_rows):
         text = str(row.get("rendered_text") or row.get("text") or "").strip()
@@ -885,25 +1012,48 @@ def readable_source_rows(rentry_rows: list[dict[str, Any]], imported_rows: list[
                 "word_count": row.get("word_count") or len(text.split()),
                 "path": str(row.get("source_path") or ""),
                 "editable": True,
+                "labels_path": IMPORTED_SOURCES_PATH,
+                "row": row,
+            }
+        )
+    for index, row in enumerate(synthetic_rows or []):
+        text = str(row.get("text") or row.get("rendered_text") or "").strip()
+        if not text:
+            continue
+        title = str(row.get("title") or f"Synthetic source {index + 1}").strip()
+        tags = row_tags(row, defaults=["synthetic"])
+        rows.append(
+            {
+                "key": str(row.get("id") or f"synthetic::{index}::{title}"),
+                "kind": "synthetic",
+                "title": title,
+                "text": text,
+                "tags": tags,
+                "labels": normalize_tag_list(row.get("labels") or row.get("tags")),
+                "word_count": row.get("word_count") or len(text.split()),
+                "path": str(row.get("source_path") or SYNTHETIC_SOURCES_PATH),
+                "editable": True,
+                "labels_path": SYNTHETIC_SOURCES_PATH,
                 "row": row,
             }
         )
     return rows
 
 
-def write_imported_source_labels(row_id: str, labels: list[str]) -> bool:
-    if not IMPORTED_SOURCES_PATH.exists():
+def write_source_labels(path: Path, row_id: str, labels: list[str]) -> bool:
+    if not path.exists():
         return False
-    rows = load_jsonl(IMPORTED_SOURCES_PATH)
+    rows = load_jsonl(path)
     updated = False
     for row in rows:
         if str(row.get("id") or "") == row_id:
             row["labels"] = labels
+            row["tags"] = labels
             updated = True
             break
     if not updated:
         return False
-    with IMPORTED_SOURCES_PATH.open("w", encoding="utf-8", newline="\n") as handle:
+    with path.open("w", encoding="utf-8", newline="\n") as handle:
         for row in rows:
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
     return True
@@ -1132,10 +1282,12 @@ def call_chat_endpoint(
     messages: list[dict[str, str]],
     temperature: float,
     max_tokens: int,
+    mode: str = DEFAULT_ENDPOINT_MODE,
 ) -> str:
     payload = {
         "model": model,
         "messages": messages,
+        "mode": mode,
         "temperature": temperature,
         "max_tokens": max_tokens,
     }
@@ -1178,6 +1330,7 @@ def render_dataset_overview(
     manifest: dict[str, Any],
     rentry_rows: list[dict[str, Any]],
     imported_rows: list[dict[str, Any]],
+    synthetic_rows: list[dict[str, Any]],
 ) -> None:
     counts = manifest.get("counts") if isinstance(manifest.get("counts"), dict) else {}
     latest_post = "-"
@@ -1194,8 +1347,8 @@ def render_dataset_overview(
             {"label": "Media rows", "value": f"{int(counts.get('all_post_rows') or len(posts)):,}", "detail": "currently Bluesky"},
             {"label": "Trainable rows", "value": f"{int(counts.get('non_empty_training_rows') or 0):,}", "detail": "base split"},
             {"label": "Reply context", "value": f"{int(counts.get('reply_rows_with_context') or 0):,}", "detail": "conversation tags"},
-            {"label": "Source docs", "value": f"{len(rentry_rows) + len(imported_rows):,}", "detail": "markdown + imports"},
-            {"label": "Tags", "value": f"{len(source_tag_counts(posts, rentry_rows, imported_rows)):,}", "detail": "computed + user labels"},
+            {"label": "Source docs", "value": f"{len(rentry_rows) + len(imported_rows) + len(synthetic_rows):,}", "detail": "markdown + imports + synthetic"},
+            {"label": "Tags", "value": f"{len(source_tag_counts(posts, rentry_rows, imported_rows, synthetic_rows)):,}", "detail": "computed + user labels"},
             {"label": "Latest media", "value": latest_post_metric, "detail": "snapshot timestamp"},
         ]
     )
@@ -1226,9 +1379,14 @@ def render_dataset_overview(
         return
 
 
-def render_sources_overview(posts: pd.DataFrame, rentry_rows: list[dict[str, Any]], imported_rows: list[dict[str, Any]]) -> None:
+def render_sources_overview(
+    posts: pd.DataFrame,
+    rentry_rows: list[dict[str, Any]],
+    imported_rows: list[dict[str, Any]],
+    synthetic_rows: list[dict[str, Any]],
+) -> None:
     st.markdown("### Sources")
-    tag_counts = source_tag_counts(posts, rentry_rows, imported_rows)
+    tag_counts = source_tag_counts(posts, rentry_rows, imported_rows, synthetic_rows)
     st.markdown(
         "".join(
             f'<span class="source-pill">{escape(tag)}: {count}</span>'
@@ -1245,12 +1403,14 @@ def render_sources_overview(posts: pd.DataFrame, rentry_rows: list[dict[str, Any
         )
     elif imported_rows:
         st.success(f"Loaded {len(imported_rows):,} imported source rows from {IMPORTED_SOURCES_PATH}.")
+    if synthetic_rows:
+        st.success(f"Loaded {len(synthetic_rows):,} synthetic source row(s) from {SYNTHETIC_SOURCES_PATH}.")
 
     source_tabs = st.tabs(["Inventory", "Reader", "Import"])
     with source_tabs[0]:
-        render_source_inventory(posts, rentry_rows, imported_rows, known_exports)
+        render_source_inventory(posts, rentry_rows, imported_rows, synthetic_rows, known_exports)
     with source_tabs[1]:
-        render_source_reader(rentry_rows, imported_rows)
+        render_source_reader(rentry_rows, imported_rows, synthetic_rows)
     with source_tabs[2]:
         render_source_import_controls()
 
@@ -1259,21 +1419,26 @@ def render_source_inventory(
     posts: pd.DataFrame,
     rentry_rows: list[dict[str, Any]],
     imported_rows: list[dict[str, Any]],
+    synthetic_rows: list[dict[str, Any]],
     known_exports: list[dict[str, Any]],
 ) -> None:
-    render_inventory_reader_shortcut(rentry_rows, imported_rows)
+    render_inventory_reader_shortcut(rentry_rows, imported_rows, synthetic_rows)
     inventory_tabs = st.tabs(["Posts", "Writing", "Local Exports"])
     with inventory_tabs[0]:
         render_post_inventory(posts)
     with inventory_tabs[1]:
-        render_writing_inventory(rentry_rows, imported_rows)
+        render_writing_inventory(rentry_rows, imported_rows, synthetic_rows)
     with inventory_tabs[2]:
         st.dataframe(pd.DataFrame(known_exports), width="stretch", hide_index=True)
 
 
-def render_inventory_reader_shortcut(rentry_rows: list[dict[str, Any]], imported_rows: list[dict[str, Any]]) -> None:
+def render_inventory_reader_shortcut(
+    rentry_rows: list[dict[str, Any]],
+    imported_rows: list[dict[str, Any]],
+    synthetic_rows: list[dict[str, Any]],
+) -> None:
     readable_rows = sorted(
-        readable_source_rows(rentry_rows, imported_rows),
+        readable_source_rows(rentry_rows, imported_rows, synthetic_rows),
         key=lambda row: (0 if row["editable"] else 1, str(row["title"]).lower()),
     )
     if not readable_rows:
@@ -1336,11 +1501,15 @@ def render_post_inventory(posts: pd.DataFrame) -> None:
     st.dataframe(explorer[visible_columns].head(100), width="stretch", hide_index=True)
 
 
-def render_writing_inventory(rentry_rows: list[dict[str, Any]], imported_rows: list[dict[str, Any]]) -> None:
+def render_writing_inventory(
+    rentry_rows: list[dict[str, Any]],
+    imported_rows: list[dict[str, Any]],
+    synthetic_rows: list[dict[str, Any]],
+) -> None:
     st.markdown("#### Writing")
     inventory_rows: list[dict[str, Any]] = []
     readable_rows = sorted(
-        readable_source_rows(rentry_rows, imported_rows),
+        readable_source_rows(rentry_rows, imported_rows, synthetic_rows),
         key=lambda row: (0 if row["editable"] else 1, str(row["title"]).lower()),
     )
     for row in readable_rows:
@@ -1374,9 +1543,13 @@ def render_writing_inventory(rentry_rows: list[dict[str, Any]], imported_rows: l
     st.dataframe(pd.DataFrame(inventory_rows), width="stretch", hide_index=True)
 
 
-def render_source_reader(rentry_rows: list[dict[str, Any]], imported_rows: list[dict[str, Any]]) -> None:
+def render_source_reader(
+    rentry_rows: list[dict[str, Any]],
+    imported_rows: list[dict[str, Any]],
+    synthetic_rows: list[dict[str, Any]],
+) -> None:
     rows = sorted(
-        readable_source_rows(rentry_rows, imported_rows),
+        readable_source_rows(rentry_rows, imported_rows, synthetic_rows),
         key=lambda row: (0 if row["editable"] else 1, str(row["title"]).lower()),
     )
     if not rows:
@@ -1436,7 +1609,8 @@ def render_source_reader(rentry_rows: list[dict[str, Any]], imported_rows: list[
         )
         if st.button("Save Tags", width="stretch", key=f"source_reader_save_tags_{selected['key']}"):
             labels_to_save = normalize_tag_list(tag_text)
-            if write_imported_source_labels(selected["key"], labels_to_save):
+            labels_path = selected.get("labels_path") or IMPORTED_SOURCES_PATH
+            if write_source_labels(Path(labels_path), selected["key"], labels_to_save):
                 st.cache_data.clear()
                 st.success("Tags saved.")
                 st.rerun()
@@ -1452,32 +1626,27 @@ def render_source_reader(rentry_rows: list[dict[str, Any]], imported_rows: list[
 
 def render_source_import_controls() -> None:
     st.caption("Imports are written into the ignored dataset folder so private notes stay local by default.")
-    configured_exports = configured_source_exports()
-    default_export = configured_exports[0] if configured_exports else {}
     input_path = st.text_input(
         "Input file or folder",
-        value=str(default_export.get("path") or ""),
+        value=str(KNOWN_SOURCE_EXPORTS[0]["path"]),
         placeholder=r"C:\Users\you\Takeout\Keep",
         key="source_import_input_path",
     )
     recursive = st.toggle(
         "Include subfolders",
-        value=bool(default_export.get("recursive", True)),
+        value=bool(KNOWN_SOURCE_EXPORTS[0]["recursive"]),
         key="source_import_recursive",
     )
     exclude_names_text = st.text_area(
         "Exclude file/folder names",
-        value=str(default_export.get("exclude_names") or ""),
+        value=str(KNOWN_SOURCE_EXPORTS[0]["exclude_names"]),
         key="source_import_exclude_names",
         height=82,
     )
-    source_type_options = ["auto", "google_keep", "poetry", "notes", "longform"]
-    default_source_type = str(default_export.get("source_type") or "auto")
-    source_type_index = source_type_options.index(default_source_type) if default_source_type in source_type_options else 0
     source_type = st.selectbox(
         "Prompt routing",
-        source_type_options,
-        index=source_type_index,
+        ["auto", "google_keep", "poetry", "notes", "longform"],
+        index=4,
         help="Prompt routing is internal. Use tags/labels below for user-facing corpus organization.",
         key="source_import_type",
     )
@@ -1543,6 +1712,185 @@ def render_source_import_controls() -> None:
                     st.code(output[-2400:], language="text")
 
 
+def render_training_filter_controls() -> None:
+    st.markdown("#### Dataset Tag Filters")
+    initial_preview = load_training_filter_preview(tuple(), tuple())
+    available_tags = list(initial_preview["available_tags"])
+    if not available_tags:
+        st.info("No trainable tags are available yet.")
+        return
+
+    filter_left, filter_right = st.columns(2)
+    include_tags = filter_left.multiselect(
+        "Include tags",
+        available_tags,
+        key="training_include_tags",
+        help="When set, training keeps examples that match at least one selected tag.",
+    )
+    exclude_tags = filter_right.multiselect(
+        "Exclude tags",
+        available_tags,
+        key="training_exclude_tags",
+        help="Training drops examples that match any selected tag.",
+    )
+    preview = load_training_filter_preview(tuple(include_tags), tuple(exclude_tags))
+
+    if include_tags or exclude_tags:
+        st.caption("Filters apply to training examples only; validation/test splits stay unchanged for comparison.")
+    else:
+        st.caption("No tag filter selected. Training plans show the default corpus composition.")
+
+    st.markdown("##### Available Tags")
+    tag_counts = preview["tag_counts"]
+    st.markdown(
+        "".join(
+            f'<span class="source-pill">{escape(tag)}: {count}</span>'
+            for tag, count in tag_counts.items()
+        ),
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("##### Filtered Dataset Variants")
+    variant_summary = preview["variant_summary"]
+    st.dataframe(variant_summary, width="stretch", hide_index=True)
+
+    st.markdown("##### Run Command")
+    plan = preview["plan"]
+    run_names = [str(value) for value in plan["run_name"].tolist()] if not plan.empty else []
+    if not run_names:
+        st.info("No run specs available.")
+        return
+    selected_run = st.selectbox(
+        "Run",
+        run_names,
+        index=run_names.index("conversational_120b_r32_lr5e5_b6") if "conversational_120b_r32_lr5e5_b6" in run_names else 0,
+        key="training_filter_run_name",
+    )
+    smoke = st.toggle("Smoke test command", value=True, key="training_filter_smoke")
+    tag_args = format_tag_cli_args(include_tags=include_tags, exclude_tags=exclude_tags)
+    command_parts = [
+        ".\\tinker_env\\Scripts\\python.exe",
+        ".\\run_tinker_experiment.py",
+        "--workspace",
+        ".",
+        "--run-name",
+        quote_powershell_arg(selected_run),
+    ]
+    if smoke:
+        command_parts.append("--smoke-test")
+    if tag_args:
+        command_parts.append(tag_args)
+    st.code(" ".join(command_parts), language="powershell")
+
+    selected_plan = preview["smoke_plan" if smoke else "plan"]
+    selected_rows = selected_plan[selected_plan["run_name"] == selected_run]
+    if not selected_rows.empty:
+        st.dataframe(selected_rows, width="stretch", hide_index=True)
+
+    render_training_example_inspector(
+        preview=preview,
+        include_tags=include_tags,
+        exclude_tags=exclude_tags,
+    )
+
+
+def render_training_example_inspector(
+    *,
+    preview: dict[str, Any],
+    include_tags: Sequence[str],
+    exclude_tags: Sequence[str],
+) -> None:
+    st.markdown("##### Training Example Inspector")
+    variant_names = list(preview.get("variant_names") or [])
+    if not variant_names:
+        st.info("No dataset variants are available for inspection.")
+        return
+    default_variant = "conversational_voice_mix" if "conversational_voice_mix" in variant_names else variant_names[0]
+    controls = st.columns([2, 1, 1, 1])
+    selected_variant = controls[0].selectbox(
+        "Dataset variant",
+        variant_names,
+        index=variant_names.index(default_variant),
+        key="training_example_preview_variant",
+    )
+    selected_split = controls[1].selectbox(
+        "Split",
+        ["train", "validation", "test"],
+        key="training_example_preview_split",
+    )
+    preview_limit = controls[2].number_input(
+        "Rows",
+        min_value=1,
+        max_value=200,
+        value=25,
+        step=1,
+        key="training_example_preview_limit",
+    )
+    export_limit = controls[3].number_input(
+        "Export rows/split",
+        min_value=1,
+        max_value=1000,
+        value=200,
+        step=25,
+        key="training_example_export_limit",
+    )
+    rows = load_training_example_preview(
+        selected_variant,
+        selected_split,
+        tuple(include_tags),
+        tuple(exclude_tags),
+        int(preview_limit),
+    )
+    if not rows:
+        st.info("No examples match the selected filters.")
+        return
+    summary_rows = [
+        {
+            "example_id": row["example_id"],
+            "format": row["training_format"],
+            "transform": row["transform"],
+            "source_kind": row["source_kind"],
+            "raw_source_id": row["raw_source_id"],
+            "target_chars": row["target_chars"],
+            "tags": ", ".join(str(tag) for tag in row["tags"][:10]),
+        }
+        for row in rows
+    ]
+    st.dataframe(pd.DataFrame(summary_rows), width="stretch", hide_index=True)
+
+    labels = [
+        f"{row['example_index']:03d} | {row['training_format']} | {row['transform']} | {row['example_id']}"
+        for row in rows
+    ]
+    selected_label = st.selectbox("Example", labels, key="training_example_preview_selected")
+    selected_row = rows[labels.index(selected_label)]
+    messages_tab, target_tab, metadata_tab = st.tabs(["Messages", "Target", "Metadata"])
+    with messages_tab:
+        st.code(json.dumps(selected_row["messages"], ensure_ascii=False, indent=2), language="json")
+    with target_tab:
+        st.text_area(
+            "Assistant target",
+            selected_row["target_text"],
+            height=260,
+            key="training_example_preview_target",
+        )
+    with metadata_tab:
+        st.code(json.dumps(selected_row["metadata"], ensure_ascii=False, indent=2), language="json")
+
+    if st.button("Write JSONL Preview", key="training_example_write_preview"):
+        try:
+            output_path = write_training_preview_file(
+                selected_variant,
+                include_tags=include_tags,
+                exclude_tags=exclude_tags,
+                limit_per_split=int(export_limit),
+            )
+        except Exception as exc:
+            st.error(f"Preview export failed: {exc}")
+        else:
+            st.success(f"Wrote {output_path}")
+
+
 def render_training_overview() -> None:
     payload = load_local_payload(WORKSPACE_ROOT)
     stop_signal_path = default_stop_signal_path(WORKSPACE_ROOT)
@@ -1588,6 +1936,8 @@ def render_training_overview() -> None:
                 {"label": "Checkpoint", "value": "-", "detail": ""},
             ]
         )
+
+    render_training_filter_controls()
 
     st.markdown("#### Stop Control")
     stop_detail = format_stop_request(str(stop_signal_path))
@@ -1669,8 +2019,29 @@ def render_endpoint_chat() -> None:
         key="endpoint_base_url",
         help="Paste this into clients that support custom OpenAI-compatible endpoints.",
     )
-    temperature = st.slider("Temperature", min_value=0.1, max_value=1.5, value=0.7, step=0.05, key="endpoint_temperature")
-    max_tokens = st.slider("Max tokens", min_value=24, max_value=512, value=128, step=8, key="endpoint_max_tokens")
+    endpoint_mode = st.selectbox(
+        "Mode",
+        ["chat", "completion"],
+        index=0,
+        key="endpoint_mode",
+        help="Chat preserves conversation turns; completion finishes the user's text.",
+    )
+    temperature = st.slider(
+        "Temperature",
+        min_value=0.1,
+        max_value=1.5,
+        value=DEFAULT_ENDPOINT_TEMPERATURE,
+        step=0.05,
+        key="endpoint_temperature",
+    )
+    max_tokens = st.slider(
+        "Max tokens",
+        min_value=24,
+        max_value=4096,
+        value=DEFAULT_ENDPOINT_MAX_TOKENS,
+        step=8,
+        key="endpoint_max_tokens",
+    )
 
     bridge_ok, bridge_detail = endpoint_health(base_url)
     left, middle, right = st.columns(3)
@@ -1721,6 +2092,7 @@ def render_endpoint_chat() -> None:
             {
                 "base_url": base_url,
                 "model": model_id,
+                "mode": endpoint_mode,
                 "api_key": "local-dev",
             },
             indent=2,
@@ -1752,6 +2124,7 @@ def render_endpoint_chat() -> None:
                         base_url=base_url,
                         model=model_id,
                         messages=st.session_state.endpoint_chat_messages,
+                        mode=endpoint_mode,
                         temperature=temperature,
                         max_tokens=max_tokens,
                     )
@@ -1823,8 +2196,9 @@ def render_evaluation() -> None:
                         base_url=base_url,
                         model=model_id,
                         messages=[{"role": "user", "content": str(row["opening_text"])}],
-                        temperature=0.7,
-                        max_tokens=128,
+                        mode="completion",
+                        temperature=DEFAULT_ENDPOINT_TEMPERATURE,
+                        max_tokens=DEFAULT_ENDPOINT_MAX_TOKENS,
                     )
                 except Exception as exc:
                     generated = f"ERROR: {exc}"
@@ -1861,9 +2235,6 @@ def render_diagnostics(manifest: dict[str, Any]) -> None:
         width="stretch",
         hide_index=True,
     )
-    with st.expander("Manifest summary"):
-        st.code(json.dumps(manifest, indent=2, default=str), language="json")
-
     st.markdown("#### Publish Safety")
     safety_rows = [
         {
@@ -1947,6 +2318,7 @@ def main() -> None:
     posts = load_posts(POSTS_CSV_PATH)
     rentry_rows = load_jsonl(RENTRY_PAGES_PATH)
     imported_rows = load_jsonl(IMPORTED_SOURCES_PATH)
+    synthetic_rows = load_jsonl(SYNTHETIC_SOURCES_PATH)
 
     render_refresh_controls(manifest)
     render_header(manifest)
@@ -1955,8 +2327,8 @@ def main() -> None:
         ["Corpus", "Evaluation", "Training", "Chat / Endpoint", "Diagnostics", "Files"]
     )
     with corpus_tab:
-        render_dataset_overview(posts, manifest, rentry_rows, imported_rows)
-        render_sources_overview(posts, rentry_rows, imported_rows)
+        render_dataset_overview(posts, manifest, rentry_rows, imported_rows, synthetic_rows)
+        render_sources_overview(posts, rentry_rows, imported_rows, synthetic_rows)
     with evaluation_tab:
         render_evaluation()
     with training_tab:
@@ -1973,6 +2345,7 @@ def main() -> None:
                     {"artifact": "Dataset manifest", "path": str(MANIFEST_PATH), "exists": MANIFEST_PATH.exists()},
                     {"artifact": "Long-form seed docs", "path": str(RENTRY_PAGES_PATH), "exists": RENTRY_PAGES_PATH.exists()},
                     {"artifact": "Imported sources", "path": str(IMPORTED_SOURCES_PATH), "exists": IMPORTED_SOURCES_PATH.exists()},
+                    {"artifact": "Synthetic sources", "path": str(SYNTHETIC_SOURCES_PATH), "exists": SYNTHETIC_SOURCES_PATH.exists()},
                     {"artifact": "Dataset builder", "path": str(DATASET_BUILDER_PATH), "exists": DATASET_BUILDER_PATH.exists()},
                     {"artifact": "Source importer", "path": str(SOURCE_IMPORTER_PATH), "exists": SOURCE_IMPORTER_PATH.exists()},
                 ]
@@ -1983,9 +2356,6 @@ def main() -> None:
         if manifest:
             st.markdown("#### Dataset Manifest Summary")
             st.dataframe(pd.DataFrame(manifest_summary_rows(manifest)), width="stretch", hide_index=True)
-            with st.expander("Manifest summary"):
-                st.code(json.dumps(manifest, indent=2, default=str), language="json")
-
 
 if __name__ == "__main__":
     main()

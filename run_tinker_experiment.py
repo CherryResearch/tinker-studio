@@ -11,7 +11,11 @@ from typing import Any
 
 import tinker
 
-from tinker_experiment_manager import build_experiment_dataset_variants
+from tinker_experiment_manager import (
+    build_experiment_dataset_variants,
+    parse_tag_filter_values,
+    write_training_example_preview_jsonl,
+)
 from tinker_notebook_env import describe_tinker_api_key, ensure_tinker_api_key
 from tinker_notebook_workflows import run_training_loop
 from tinker_stop_control import clear_stop_request, default_stop_signal_path
@@ -27,6 +31,8 @@ from tinker_training_utils import (
 MODEL_OVERRIDES = {
     "gpt-oss-20b": {"learning_rate": 1e-4, "renderer_name": None},
     "openai/gpt-oss-20b": {"learning_rate": 1e-4, "renderer_name": None},
+    "gpt-oss-120b": {"learning_rate": 7e-5, "renderer_name": None},
+    "openai/gpt-oss-120b": {"learning_rate": 7e-5, "renderer_name": None},
 }
 AUTO_RESUME_STALE_SECONDS = 5 * 60
 RUN_OUTPUTS_DIRNAME = "run_outputs"
@@ -52,6 +58,33 @@ def parse_args() -> argparse.Namespace:
         "--run-name",
         default="essay_recent_r16",
         help="Experiment run name to execute.",
+    )
+    parser.add_argument(
+        "--include-tag",
+        action="append",
+        default=[],
+        help="Train only on examples matching at least one tag. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--exclude-tag",
+        action="append",
+        default=[],
+        help="Drop training examples matching any tag. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--export-training-preview",
+        nargs="?",
+        const="",
+        help=(
+            "Write the selected dataset variant as JSONL and exit. "
+            "When no path is supplied, writes under run_outputs/dataset_previews."
+        ),
+    )
+    parser.add_argument(
+        "--preview-limit",
+        type=int,
+        default=0,
+        help="Limit preview export rows per split. 0 exports all rows.",
     )
     parser.add_argument(
         "--smoke-test",
@@ -162,8 +195,10 @@ def get_model_override(requested_name: str, resolved_name: str) -> dict[str, Any
 
 def get_experiment_specs(smoke_test: bool) -> list[dict[str, Any]]:
     num_epochs = 1 if smoke_test else 3
+    conversation_epochs = 1 if smoke_test else 2
     batch_size = 8
     max_length = 512
+    conversation_max_length = 1024
     return [
         {
             "run_name": "essay_recent_r16",
@@ -264,6 +299,95 @@ def get_experiment_specs(smoke_test: bool) -> list[dict[str, Any]]:
             "run_post_train_eval": False,
             "run_post_train_sampling": True,
             "notes": "Mixed corpus plus local imported notes, poetry, and longform sources.",
+        },
+        {
+            "run_name": "personal_sources_120b_r32_lr7e5_b6",
+            "model_alias": "gpt-oss-120b",
+            "dataset_variant": "personal_sources_mix",
+            "lora_rank": 32,
+            "learning_rate": 7e-5,
+            "batch_size": 6,
+            "max_length": max_length,
+            "num_epochs": num_epochs,
+            "train_example_limit": 96 if smoke_test else None,
+            "max_steps_per_model": 12 if smoke_test else None,
+            "eval_example_limit": 5,
+            "sample_temperature": 0.71,
+            "sample_max_tokens": 96,
+            "print_every_steps": 1 if smoke_test else 5,
+            "save_state_every_steps": 4 if smoke_test else 20,
+            "run_post_train_eval": False,
+            "run_post_train_sampling": True,
+            "notes": "Personal-source corpus on gpt-oss-120b with LoRA rank 32, gentler learning rate, and smaller batch size.",
+        },
+        {
+            "run_name": "conversational_120b_r8_lr3e5_b6",
+            "model_alias": "gpt-oss-120b",
+            "dataset_variant": "conversational_voice_mix",
+            "lora_rank": 8,
+            "learning_rate": 3e-5,
+            "batch_size": 6,
+            "max_length": conversation_max_length,
+            "num_epochs": conversation_epochs,
+            "train_example_limit": 96 if smoke_test else None,
+            "max_steps_per_model": 12 if smoke_test else None,
+            "eval_example_limit": 5,
+            "sample_temperature": 0.45,
+            "sample_max_tokens": 192,
+            "print_every_steps": 1 if smoke_test else 5,
+            "save_state_every_steps": 4 if smoke_test else 20,
+            "run_post_train_eval": False,
+            "run_post_train_sampling": True,
+            "notes": (
+                "Lower-capacity conversational run for preserving base reasoning while nudging voice. "
+                "Recommended first pass after chat-format/data-audit changes."
+            ),
+        },
+        {
+            "run_name": "conversational_120b_r16_lr4e5_b6",
+            "model_alias": "gpt-oss-120b",
+            "dataset_variant": "conversational_voice_mix",
+            "lora_rank": 16,
+            "learning_rate": 4e-5,
+            "batch_size": 6,
+            "max_length": conversation_max_length,
+            "num_epochs": conversation_epochs,
+            "train_example_limit": 96 if smoke_test else None,
+            "max_steps_per_model": 12 if smoke_test else None,
+            "eval_example_limit": 5,
+            "sample_temperature": 0.45,
+            "sample_max_tokens": 192,
+            "print_every_steps": 1 if smoke_test else 5,
+            "save_state_every_steps": 4 if smoke_test else 20,
+            "run_post_train_eval": False,
+            "run_post_train_sampling": True,
+            "notes": (
+                "Middle-capacity conversational run for more voice transfer than rank 8 without the rank-32 tendency "
+                "to over-imprint small stylized data."
+            ),
+        },
+        {
+            "run_name": "conversational_120b_r32_lr5e5_b6",
+            "model_alias": "gpt-oss-120b",
+            "dataset_variant": "conversational_voice_mix",
+            "lora_rank": 32,
+            "learning_rate": 5e-5,
+            "batch_size": 6,
+            "max_length": conversation_max_length,
+            "num_epochs": conversation_epochs,
+            "train_example_limit": 96 if smoke_test else None,
+            "max_steps_per_model": 12 if smoke_test else None,
+            "eval_example_limit": 5,
+            "sample_temperature": 0.7,
+            "sample_max_tokens": 256,
+            "print_every_steps": 1 if smoke_test else 5,
+            "save_state_every_steps": 4 if smoke_test else 20,
+            "run_post_train_eval": False,
+            "run_post_train_sampling": True,
+            "notes": (
+                "Conversational personal-source corpus on gpt-oss-120b. Uses the chat-shaped dataset variant, "
+                "rank 32, lower learning rate, and two full epochs to reduce post-completion overfit."
+            ),
         },
     ]
 
@@ -492,6 +616,12 @@ def describe_payload(payload: dict[str, Any], *, run_name: str) -> list[str]:
             lines.append(f"progress: {completed_steps}/{planned_steps} steps")
         else:
             lines.append(f"completed_steps: {completed_steps}")
+    include_tags = payload.get("include_tags")
+    exclude_tags = payload.get("exclude_tags")
+    if isinstance(include_tags, list) and include_tags:
+        lines.append(f"include_tags: {', '.join(str(tag) for tag in include_tags)}")
+    if isinstance(exclude_tags, list) and exclude_tags:
+        lines.append(f"exclude_tags: {', '.join(str(tag) for tag in exclude_tags)}")
     waiting_on = payload.get("waiting_on")
     if isinstance(waiting_on, str) and waiting_on.strip():
         lines.append(f"waiting_on: {waiting_on}")
@@ -576,19 +706,44 @@ def main() -> int:
             "Use only one of --resume, --auto-resume, or --resume-from-checkpoint for a single run."
         )
 
+    dataset_root = find_dataset_root(workspace_root)
+    bundle = load_dataset_bundle(dataset_root)
+    include_tags = parse_tag_filter_values(args.include_tag)
+    exclude_tags = parse_tag_filter_values(args.exclude_tag)
+    dataset_variants = build_experiment_dataset_variants(
+        bundle,
+        include_tags=include_tags,
+        exclude_tags=exclude_tags,
+    )
+
+    experiment_spec = experiment_specs[args.run_name]
+    dataset_variant = dataset_variants[experiment_spec["dataset_variant"]]
+    if args.export_training_preview is not None:
+        if args.export_training_preview:
+            preview_path = Path(args.export_training_preview).expanduser()
+            if not preview_path.is_absolute():
+                preview_path = workspace_root / preview_path
+        else:
+            preview_path = (
+                run_dir
+                / "dataset_previews"
+                / f"{now_utc_compact()}-{slugify_name(args.run_name) or 'training-preview'}.jsonl"
+            )
+        row_count = write_training_example_preview_jsonl(
+            preview_path,
+            {experiment_spec["dataset_variant"]: dataset_variant},
+            split_names=("train", "validation", "test"),
+            limit_per_split=None if args.preview_limit <= 0 else int(args.preview_limit),
+        )
+        print(f"[PREVIEW] wrote {row_count} rows to {preview_path}")
+        return 0
+
     key_info = ensure_tinker_api_key(required=True)
     print(describe_tinker_api_key(key_info))
 
     stop_signal_path = default_stop_signal_path(workspace_root)
     if args.clear_stop_request and clear_stop_request(stop_signal_path):
         print(f"[STOP] cleared stale stop request: {stop_signal_path}")
-
-    dataset_root = find_dataset_root(workspace_root)
-    bundle = load_dataset_bundle(dataset_root)
-    dataset_variants = build_experiment_dataset_variants(bundle)
-
-    experiment_spec = experiment_specs[args.run_name]
-    dataset_variant = dataset_variants[experiment_spec["dataset_variant"]]
 
     resume_checkpoint_path: str | None = None
     resume_payload: dict[str, Any] | None = None
@@ -669,6 +824,12 @@ def main() -> int:
         f"batch_size={experiment_spec['batch_size']} epochs={experiment_spec['num_epochs']}"
     )
     print(f"[START] notes={experiment_spec['notes']}")
+    if include_tags or exclude_tags:
+        print(
+            "[START] tag_filters="
+            f"include={include_tags or ['<none>']} exclude={exclude_tags or ['<none>']} "
+            "(training examples only)"
+        )
 
     session_id = get_current_session_id(service_client)
     if resume_checkpoint_path:
@@ -696,6 +857,8 @@ def main() -> int:
         "dataset_root": str(dataset_root),
         "run_name": experiment_spec["run_name"],
         "dataset_variant": experiment_spec["dataset_variant"],
+        "include_tags": include_tags,
+        "exclude_tags": exclude_tags,
         "model_alias": experiment_spec["model_alias"],
         "requested_name": requested_name,
         "resolved_name": resolved_name,
